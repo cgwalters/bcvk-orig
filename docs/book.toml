@@ -1,0 +1,17 @@
+[book]
+title = "bcvk Documentation"
+authors = ["Colin Walters"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+git-repository-url = "https://github.com/cgwalters/bootc-kit"
+git-repository-icon = "fa-github"

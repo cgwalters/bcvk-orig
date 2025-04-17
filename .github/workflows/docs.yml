@@ -1,0 +1,71 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'docs/**' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'docs/**' ]
+  workflow_dispatch:
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mdBook
+        run: |
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.37/mdbook-v0.4.37-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=.
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Install mdbook-mermaid
+        run: |
+          curl -sSL https://github.com/badboy/mdbook-mermaid/releases/download/v0.13.0/mdbook-mermaid-v0.13.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=.
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Install mdbook-linkcheck
+        run: |
+          curl -sSL https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/download/v0.7.7/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o linkcheck.zip
+          unzip linkcheck.zip
+          chmod +x mdbook-linkcheck
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Install mdbook_header_footer
+        run: |
+          curl -sSL https://github.com/cgwalters/mdbook_header_footer/releases/download/v0.1.0/mdbook_header_footer-v0.1.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=.
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Build documentation
+        run: |
+          cd docs
+          mdbook build
+
+      - name: Upload artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book/html
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
