@@ -1,0 +1,20 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+color-eyre = { workspace = true }
+dirs = "5.0"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error = { workspace = true }
+xshell = { workspace = true }
+cfg-if = { workspace = true }
+serde = "1.0.199"
+serde_json = "1.0.116"
+libtest-mimic = "0.7.3"
+tempfile = "3"
+uuid = { version = "1.18.1", features = ["v4"] }
+camino = "1.1.12"

@@ -1,0 +1,52 @@
+[package]
+name = "bcvk"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+cap-std-ext = { version = "4" }
+chrono = { version = "0.4", features = ["serde"] }
+const_format = { workspace = true }
+color-eyre = { workspace = true }
+clap = { version = "4.4", features = ["derive"] }
+clap_mangen = { version = "0.2.20", optional = true }
+data-encoding = { version = "2.9" }
+dirs = "5.0"
+fn-error-context = { version = "0.2" }
+bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+indicatif = "0.17"
+thiserror = "1.0"
+rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
+serde = { version = "1.0.199", features = ["derive"] }
+serde_json = "1.0.116"
+tokio = { version = "1", features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error = { workspace = true }
+shlex = "1"
+reqwest = { version = "0.12", features = ["blocking"] }
+tempfile = "3"
+uuid = { version = "1.10", features = ["v4"] }
+xshell = { workspace = true }
+yaml-rust2 = "0.9"
+rand = { workspace = true }
+cfg-if = { workspace = true }
+indoc = "2.0.6"
+regex = "1.10"
+itertools = "0.14.0"
+vsock = "0.5"
+nix = { version = "0.29", features = ["socket"] }
+libc = "0.2"
+camino = "1.1.12"
+comfy-table = "7.1"
+
+[dev-dependencies]
+similar-asserts = "1.5"
+
+[features]
+# Implementation detail of man page generation.
+docgen = ["clap_mangen"]
+

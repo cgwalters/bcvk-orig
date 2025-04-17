@@ -1,0 +1,28 @@
+# See https://github.com/matklad/cargo-xtask
+[package]
+name = "xtask"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/xtask.rs"
+
+[dependencies]
+color-eyre = { workspace = true }
+cfg-if = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error = { workspace = true }
+xshell = { workspace = true }
+anyhow = "1.0"
+camino = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.0"
+toml = "0.8"
+
+[lints]
+workspace = true
