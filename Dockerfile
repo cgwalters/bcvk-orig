@@ -1,20 +1,22 @@
-FROM registry.redhat.io/ubi9/ubi:latest as build
-# Only copy these to ensure layer caching works
-COPY dependencies.txt build-dependencies.txt /src
+FROM scratch as dependencies
+COPY *dependencies.txt /
+
+FROM quay.io/centos/centos:stream10 as base
 WORKDIR /src
-RUN <<EORUN
+RUN --mount=type=bind,from=dependencies,target=/run/deps <<EORUN
 set -xeuo pipefail
-# We'll inject nushell into the target, but in order to avoid
-# depsolving twice, download it and other runtime deps at build time.
-dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-mkdir /out-rpms
-cd /out-rpms
-grep -vE -e '^#' /src/dependencies.txt | xargs dnf -y download
+dnf config-manager --set-enabled crb
+dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+grep -vE -e '^#' /run/deps/dependencies.txt | xargs dnf -y install
+dnf clean all
+rm -rf /var/{cache,tmp,log}/*
 EORUN
-RUN <<EORUN
+
+FROM base as buildroot
+RUN --mount=type=bind,from=dependencies,target=/run/deps <<EORUN
 set -xeuo pipefail
 # Build dependencies
-grep -vE -e '^#' /src/build-dependencies.txt | xargs dnf -y install
+grep -vE -e '^#' /run/deps/build-dependencies.txt | xargs dnf -y install
 EORUN
 # Only now copy the full source code so source changes don't blow out the package caches
 COPY . /src
@@ -24,9 +26,7 @@ RUN --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root \
     make && make install DESTDIR=/out
 
-FROM registry.redhat.io/ubi9/ubi:latest
-# Install target dependencies we downloaded in the build phase.
-RUN --mount=type=bind,from=build,target=/build rpm -ivh /build/out-rpms/*.rpm
-COPY --from=build /out/ /
+FROM base
+COPY --from=buildroot /out/ /
 ENTRYPOINT ["bootc-kit"]
 
