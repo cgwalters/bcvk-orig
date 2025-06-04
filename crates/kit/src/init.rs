@@ -36,10 +36,9 @@ impl InitOpts {
 /// Set up an instance of cstor-dist for the user
 #[instrument]
 fn setup_cstor_dist() -> Result<()> {
-    println!("Setting up cstor-dist...");
 
     // Check if it's already running
-    let status = hostexec::podman()?
+    let output = hostexec::podman()?
         .args([
             "ps",
             "--filter",
@@ -47,14 +46,14 @@ fn setup_cstor_dist() -> Result<()> {
             "--format",
             "{{.Names}}",
         ])
-        .output()
+        .run_get_string()
         .map_err(|e| eyre!("Failed to check if cstor-dist is running: {}", e))?;
-
-    if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+    if !output.trim().is_empty() {
         println!("cstor-dist is already running");
         return Ok(());
     }
 
+    println!("Setting up cstor-dist...");
     let cstor_dist_image = std::env::var(CSTOR_DIST_IMAGE_ENV)
         .unwrap_or_else(|_| DEFAULT_CSTOR_DIST_IMAGE.to_string());
     let port = std::env::var_os(CSTOR_DIST_PORT_ENV);
@@ -71,7 +70,7 @@ fn setup_cstor_dist() -> Result<()> {
         cstor_dist_image
     );
     hostexec::podman()?
-        .args(["run", "-d", "--name", "cstor-dist"])
+        .args(["run", "--rm", "-d", "--name", "cstor-dist"])
         .arg(format!("--publish={port}:8000"))
         .arg(cstor_dist_image.as_str())
         .run()
