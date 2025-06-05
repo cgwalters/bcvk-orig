@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::net::TcpListener;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -16,14 +18,43 @@ use tracing::instrument;
 
 use crate::{hostexec, images, sshcred};
 
-const VIRTIOFS_MOUNT: &str = "host-container-storage";
-const USER_STORAGE: &str = ".local/share/containers/storage";
+const CLOUDINIT: &str = indoc::indoc! { r#"
+#cloud-config
+bootcmd:
+  - |
+    #!/bin/bash
+    set -xeuo pipefail
+
+    # Automatically enable console login for convenient debugging
+    mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
+    cat > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf << 'EOF'
+    [Service]
+    ExecStart=
+    ExecStart=-/usr/sbin/agetty --autologin root --noclear %I $TERM
+    EOF
+    systemctl daemon-reload
+    systemctl restart serial-getty@ttyS0.service
+
+    dnf -y install podman
+    cat >/etc/containers/registries.conf.d/00
+    #podman run --rm --privileged -v /dev:/dev -v /:/target -v /var/lib/containers:/var/lib/containers --pid=host \
+    #    --security-opt label=type:unconfined_t {{image}} bootc install to-existing-root && reboot
+"# };
 
 #[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 enum LibvirtConnection {
     Session,
     System,
+}
+
+impl LibvirtConnection {
+    fn to_url(&self) -> &'static str {
+        match self {
+            LibvirtConnection::Session => "qemu:///session",
+            LibvirtConnection::System => "qemu:///system",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, clap::Args)]
@@ -167,20 +198,16 @@ impl VirtInstallOpts {
     }
 }
 
-fn virsh_command(libvirt_opts: &LibvirtGenericOpts) -> Command {
-    let conn = match libvirt_opts.connection {
-        LibvirtConnection::Session => "qemu:///session",
-        LibvirtConnection::System => "qemu:///system",
-    };
-    let mut r = Command::new("virsh");
-    r.args(["-c", conn]);
-    r
+fn virsh_command(libvirt_opts: &LibvirtGenericOpts) -> Result<Command> {
+    let mut r = hostexec::command("virsh", None)?;
+    r.args(["-c", libvirt_opts.connection.to_url()]);
+    Ok(r)
 }
 
 #[instrument(skip(libvirt_opts))]
 fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) -> Result<()> {
     let vol = os.libvirt_name();
-    let exists = virsh_command(&libvirt_opts)
+    let exists = virsh_command(&libvirt_opts)?
         .args(["vol-info", "--pool", libvirt_storage_pool(), vol])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -188,10 +215,10 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
         .success();
     if exists {
         if !force {
-            tracing::debug!("Volume already present: {vol}");
+            println!("Volume already present: {vol}");
             return Ok(());
         } else {
-            virsh_command(&libvirt_opts)
+            virsh_command(&libvirt_opts)?
                 .args(["vol-delete", "--pool", libvirt_storage_pool(), vol])
                 .run()
                 .map_err(|e| eyre!("Failed to delete volume: {e}"))?;
@@ -208,7 +235,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
     };
     tracing::debug!("size={size}");
     let size_str = format!("{size}");
-    virsh_command(&libvirt_opts)
+    virsh_command(&libvirt_opts)?
         .args([
             "vol-create-as",
             "--format",
@@ -228,7 +255,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
         .arg(fifopath)
         .run()
         .map_err(|e| eyre!("Creating fifo: {e}"))?;
-    let mut uploader = virsh_command(&libvirt_opts)
+    let mut uploader = virsh_command(&libvirt_opts)?
         .args(["vol-upload", vol, fifopath.as_str(), libvirt_storage_pool()])
         .stdout(Stdio::null())
         .spawn()?;
@@ -256,11 +283,36 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
 }
 
 fn vol_path(opts: &LibvirtGenericOpts, name: &str) -> Result<String> {
-    let r = virsh_command(opts)
+    let r = virsh_command(opts)?
         .args(["vol-path", name, libvirt_storage_pool()])
         .run_get_string()
         .map_err(|e| eyre!("Failed to query volume path: {e}"))?;
     Ok(r.trim().to_owned())
+}
+
+#[allow(dead_code)]
+fn vol_qcow2_clone(opts: &LibvirtGenericOpts, name: &str, newname: &str) -> Result<()> {
+    let srcpath = vol_path(opts, name)?;
+    let target_dir = Path::new(&srcpath).parent().unwrap();
+    let target_path = target_dir.join(newname);
+    let target_path = target_path.to_str().unwrap();
+    let mut r = hostexec::command("qemu-img", None)?;
+    r.args([
+        "create",
+        "-f",
+        "qcow2",
+        "-b",
+        srcpath.as_str(),
+        "-F",
+        "qcow2",
+        target_path,
+    ]);
+    r.run().map_err(|e| eyre!("Failed to clone volume: {e}"))?;
+    hostexec::command("chcon", None)?
+        .args(["--reference", srcpath.as_str(), target_path])
+        .run()
+        .map_err(|e| eyre!("Failed to chcon: {e}"))?;
+    Ok(())
 }
 
 impl FromSRBOpts {
@@ -291,6 +343,7 @@ impl FromSRBOpts {
 
         let mut qemu_commandline = Vec::new();
         let mut vinstall = hostexec::command("virt-install", None)?;
+        vinstall.args(["--connect", self.libvirt_opts.connection.to_url()]);
         vinstall.args([
             "--import",
             "--noautoconsole",
@@ -298,21 +351,14 @@ impl FromSRBOpts {
         ]);
         vinstall.args(transient.then_some("--transient"));
         vinstall.arg(format!("--os-variant={}", os.osinfo_name()));
-        let home = std::env::var("HOME").context("Querying $HOME")?;
         vinstall.args(self.name.map(|name| format!("--name={name}")));
         vinstall.arg(format!(
             "--metadata=description=bootc-kit cloud installation of {image}"
         ));
         vinstall.arg(format!("--memory={}", self.memory));
         vinstall.arg(format!("--vcpus={}", self.vcpus));
-        if transient {
-            vinstall.arg(format!("--disk=size={},backing_store={volpath}", self.size));
-        } else {
-            vinstall.arg(format!(
-                "--disk=transient,vol={}/{volname}",
-                libvirt_storage_pool()
-            ));
-        }
+        vinstall.arg(format!("--disk=size={},backing_store={volpath}", self.size));
+
         // Handle usermode port forwarding
         let port = if self.libvirt_opts.connection == LibvirtConnection::Session {
             let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -322,13 +368,20 @@ impl FromSRBOpts {
         } else {
             None
         };
-        // We always pass through the user's container storage
-        if !self.skip_bind_storage {
-            vinstall.arg(format!(
-                "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
-            ));
-        }
-        if let Some(key) = self.sshkey.as_deref() {
+        let key_contents = if let Some(path) = self.sshkey.as_deref() {
+            // Need to read this from the host context
+            let mut r = hostexec::command("cat", None)?
+                .arg(path)
+                .run_get_string()
+                .map_err(|e| eyre!("Failed to read SSH key: {e}"))?;
+            while r.ends_with('\n') {
+                r.pop();
+            }
+            Some(r)
+        } else {
+            None
+        };
+        if let Some(key) = key_contents.as_ref() {
             let cred = sshcred::credential_for_root_ssh(key)?;
             qemu_commandline.push(format!("-smbios type=11,value={cred}"));
         }
@@ -338,6 +391,14 @@ impl FromSRBOpts {
             // but we really shouldn't have any of those.
             vinstall.arg(format!("--qemu-commandline={qemu_commandline}"));
         }
+
+        let mut cloud_init_tmpf = tempfile::NamedTempFile::new()?;
+        cloud_init_tmpf.write_all(CLOUDINIT.as_bytes())?;
+        cloud_init_tmpf.flush()?;
+        // SAFETY: should be utf-8
+        let cloud_init_tmpf = cloud_init_tmpf.path().to_str().unwrap();
+        vinstall.arg(format!("--cloud-init=user-data={}", cloud_init_tmpf));
+
         // Pass through user-provided args
         vinstall.args(self.vinstarg);
         println!("+ {}", vinstall.to_string_pretty());

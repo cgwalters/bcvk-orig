@@ -17,8 +17,9 @@ args+=(--net=host --privileged --pid=host)
 # Mounts we bind to get access to host functionality
 args+=(-v ${XDG_RUNTIME_DIR}/bus:/run/bus --env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/bus)
 # However by default keep the image read only, just on general principle.
-args+=(--read-only --read-only-tmpfs)
+# We need to pass through the host /tmp as we use it to communicate with libvirt
+args+=(--read-only --read-only-tmpfs -v /tmp:/tmp)
 # Default to passing through the current working directory.
 args+=(-v $(pwd):/run/context -w /run/context)
 # And spawn the container.
-exec podman run ${args[@]} "${BOOTC_KIT_IMAGE}" "$@"
+exec podman run $BCK_CONTAINER_ARGS ${args[@]} "${BOOTC_KIT_IMAGE}" "$@"

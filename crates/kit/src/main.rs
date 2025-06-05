@@ -12,8 +12,10 @@ mod envdetect;
 mod hostexec;
 mod images;
 mod init;
+mod podman;
 mod runrmvm;
 mod sshcred;
+mod utils;
 mod virtinstall;
 mod vm;
 

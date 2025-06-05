@@ -7,7 +7,7 @@ use bootc_utils::CommandRunExt;
 use color_eyre::{eyre::eyre, Result};
 use tracing::instrument;
 
-use crate::hostexec;
+use crate::{hostexec, podman};
 
 /// Default cstor-dist image
 const DEFAULT_CSTOR_DIST_IMAGE: &str = "ghcr.io/cgwalters/cstor-dist:latest";
@@ -36,7 +36,6 @@ impl InitOpts {
 /// Set up an instance of cstor-dist for the user
 #[instrument]
 fn setup_cstor_dist() -> Result<()> {
-
     // Check if it's already running
     let output = hostexec::podman()?
         .args([
@@ -54,6 +53,13 @@ fn setup_cstor_dist() -> Result<()> {
     }
 
     println!("Setting up cstor-dist...");
+    let podman_status = podman::get_system_info()?;
+    if podman_status.store.graph_driver_name != "overlay" {
+        return Err(eyre!(
+            "Expected overlay graph driver, found {}",
+            podman_status.store.graph_driver_name
+        ));
+    }
     let cstor_dist_image = std::env::var(CSTOR_DIST_IMAGE_ENV)
         .unwrap_or_else(|_| DEFAULT_CSTOR_DIST_IMAGE.to_string());
     let port = std::env::var_os(CSTOR_DIST_PORT_ENV);
@@ -70,7 +76,11 @@ fn setup_cstor_dist() -> Result<()> {
         cstor_dist_image
     );
     hostexec::podman()?
-        .args(["run", "--rm", "-d", "--name", "cstor-dist"])
+        .args(["run", "--privileged", "-d", "--name", "cstor-dist"])
+        .arg(format!(
+            "--volume={}:/var/lib/containers/storage",
+            podman_status.store.graph_root
+        ))
         .arg(format!("--publish={port}:8000"))
         .arg(cstor_dist_image.as_str())
         .run()

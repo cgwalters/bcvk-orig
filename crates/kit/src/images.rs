@@ -48,8 +48,6 @@ pub struct Image {
     pub names: Option<Vec<String>>,
     pub id: String,
     pub size: u64,
-    #[serde(default)]
-    #[serde(with = "chrono::serde::ts_seconds_option")]
     pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
