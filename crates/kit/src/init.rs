@@ -14,7 +14,7 @@ const DEFAULT_CSTOR_DIST_IMAGE: &str = "ghcr.io/cgwalters/cstor-dist:latest";
 /// Environment variable to override the cstor-dist image
 const CSTOR_DIST_IMAGE_ENV: &str = "CSTOR_DIST_IMAGE";
 /// Default TCP port to listen on for cstor-dist
-const DEFAULT_CSTOR_DIST_PORT: u16 = 9050;
+pub const DEFAULT_CSTOR_DIST_PORT: u16 = 9050;
 /// Environment variable to override the cstor-dist port
 const CSTOR_DIST_PORT_ENV: &str = "CSTOR_DIST_PORT";
 

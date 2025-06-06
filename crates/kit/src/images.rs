@@ -59,8 +59,8 @@ pub struct ImageInspect {
     pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub(crate) fn inspect(name: &str) -> Result<ImageListEntry> {
-    let mut r: Vec<ImageListEntry> = hostexec::command("podman", None)?
+pub(crate) fn inspect(name: &str) -> Result<ImageInspect> {
+    let mut r: Vec<ImageInspect> = hostexec::command("podman", None)?
         .args(["image", "inspect", name])
         .run_and_parse_json()
         .map_err(|e| eyre::eyre!("{e}"))?;

@@ -77,8 +77,10 @@ impl RunRmVmOpts {
         let virt_install_opts = VirtInstallOpts::FromSRB(FromSRBOpts {
             libvirt_opts: Default::default(),
             image: self.image.clone(),
+            remote: false,
             transient: true, // Always use transient for ephemeral VMs
             skip_bind_storage: false,
+            autodestroy: false,
             base_volume: None,
             name: Some(vm_name.clone()),
             sshkey: Some(sshkey_path.clone()),

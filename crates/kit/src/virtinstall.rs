@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write as _;
@@ -16,58 +17,17 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use tracing::instrument;
 
+use crate::init::DEFAULT_CSTOR_DIST_PORT;
+use crate::vm::{virsh_command, LibvirtConnection};
 use crate::{hostexec, images, sshcred};
 
-const CLOUDINIT: &str = indoc::indoc! { r#"
-#cloud-config
-bootcmd:
-  - |
-    #!/bin/bash
-    set -xeuo pipefail
-
-    # Automatically enable console login for convenient debugging
-    mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
-    cat > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf << 'EOF'
-    [Service]
-    ExecStart=
-    ExecStart=-/usr/sbin/agetty --autologin root --noclear %I $TERM
-    EOF
-    systemctl daemon-reload
-    systemctl restart serial-getty@ttyS0.service
-
-    dnf -y install podman
-    cat >/etc/containers/registries.conf.d/00
-    #podman run --rm --privileged -v /dev:/dev -v /:/target -v /var/lib/containers:/var/lib/containers --pid=host \
-    #    --security-opt label=type:unconfined_t {{image}} bootc install to-existing-root && reboot
-"# };
-
-#[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum)]
-#[clap(rename_all = "kebab-case")]
-enum LibvirtConnection {
-    Session,
-    System,
-}
-
-impl LibvirtConnection {
-    fn to_url(&self) -> &'static str {
-        match self {
-            LibvirtConnection::Session => "qemu:///session",
-            LibvirtConnection::System => "qemu:///system",
-        }
-    }
-}
+const REINSTALL_SCRIPT: &str = include_str!("reinstall.py");
 
 #[derive(Debug, Clone, Default, clap::Args)]
 pub(crate) struct LibvirtGenericOpts {
     /// Connection to libvirt
     #[clap(long, default_value = "session")]
     connection: LibvirtConnection,
-}
-
-impl Default for LibvirtConnection {
-    fn default() -> Self {
-        Self::Session
-    }
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -148,6 +108,10 @@ pub struct FromSRBOpts {
     /// Name of the image to install
     pub image: String,
 
+    /// Set to true to fetch directly from a remote registry
+    #[clap(long)]
+    pub remote: bool,
+
     /// This virtual machine should not persist across host reboots
     #[clap(long)]
     pub transient: bool,
@@ -165,6 +129,10 @@ pub struct FromSRBOpts {
     /// Name for the virtual machine
     #[clap(long)]
     pub name: Option<String>,
+
+    /// Automatically destroy an existing VM with this name
+    #[clap(long, short = 'D')]
+    pub autodestroy: bool,
 
     /// Path to SSH key
     #[clap(long)]
@@ -198,16 +166,10 @@ impl VirtInstallOpts {
     }
 }
 
-fn virsh_command(libvirt_opts: &LibvirtGenericOpts) -> Result<Command> {
-    let mut r = hostexec::command("virsh", None)?;
-    r.args(["-c", libvirt_opts.connection.to_url()]);
-    Ok(r)
-}
-
 #[instrument(skip(libvirt_opts))]
 fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) -> Result<()> {
     let vol = os.libvirt_name();
-    let exists = virsh_command(&libvirt_opts)?
+    let exists = virsh_command(libvirt_opts.connection)?
         .args(["vol-info", "--pool", libvirt_storage_pool(), vol])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -218,7 +180,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
             println!("Volume already present: {vol}");
             return Ok(());
         } else {
-            virsh_command(&libvirt_opts)?
+            virsh_command(libvirt_opts.connection)?
                 .args(["vol-delete", "--pool", libvirt_storage_pool(), vol])
                 .run()
                 .map_err(|e| eyre!("Failed to delete volume: {e}"))?;
@@ -235,7 +197,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
     };
     tracing::debug!("size={size}");
     let size_str = format!("{size}");
-    virsh_command(&libvirt_opts)?
+    virsh_command(libvirt_opts.connection)?
         .args([
             "vol-create-as",
             "--format",
@@ -255,7 +217,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
         .arg(fifopath)
         .run()
         .map_err(|e| eyre!("Creating fifo: {e}"))?;
-    let mut uploader = virsh_command(&libvirt_opts)?
+    let mut uploader = virsh_command(libvirt_opts.connection)?
         .args(["vol-upload", vol, fifopath.as_str(), libvirt_storage_pool()])
         .stdout(Stdio::null())
         .spawn()?;
@@ -283,7 +245,7 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
 }
 
 fn vol_path(opts: &LibvirtGenericOpts, name: &str) -> Result<String> {
-    let r = virsh_command(opts)?
+    let r = virsh_command(opts.connection)?
         .args(["vol-path", name, libvirt_storage_pool()])
         .run_get_string()
         .map_err(|e| eyre!("Failed to query volume path: {e}"))?;
@@ -315,10 +277,78 @@ fn vol_qcow2_clone(opts: &LibvirtGenericOpts, name: &str, newname: &str) -> Resu
     Ok(())
 }
 
+/// Given the container image, generate a cloud-init config with boot commands
+/// which injects our shell script to provision.
+fn template_cloudinit(image: &str, local: bool) -> Result<String> {
+    use yaml_rust2::{yaml, Yaml};
+
+    let port = if local {
+        Cow::Owned(format!("{DEFAULT_CSTOR_DIST_PORT}"))
+    } else {
+        Cow::Borrowed("")
+    };
+
+    // Make the cloud-init config as yaml
+    let mut v = yaml_rust2::yaml::Hash::new();
+
+    // Generate write_files
+    {
+        let mut writefiles_entry = yaml::Hash::new();
+        writefiles_entry.insert(
+            Yaml::String("path".into()),
+            Yaml::String("/usr/local/bin/bootc-cloudinit-entrypoint".into()),
+        );
+        writefiles_entry.insert(
+            Yaml::String("permissions".into()),
+            Yaml::String("0755".into()),
+        );
+        writefiles_entry.insert(
+            Yaml::String("content".into()),
+            Yaml::String(REINSTALL_SCRIPT.into()),
+        );
+        let mut writefiles = yaml::Array::new();
+        writefiles.push(Yaml::Hash(writefiles_entry));
+        v.insert(Yaml::String("write_files".into()), Yaml::Array(writefiles));
+    }
+    // Generate runcmd
+    {
+        // bootcmd is an array of strings
+        let mut cmds = yaml::Array::new();
+        cmds.push(Yaml::String(
+            format!("env BOOTC_TARGET_IMAGE={image} BOOTC_CSTOR_DIST_PORT={port} /usr/local/bin/bootc-cloudinit-entrypoint")
+        ));
+
+        v.insert(Yaml::String("runcmd".into()), Yaml::Array(cmds));
+    }
+
+    // Serialize it to a string
+    let mut out_str = String::new();
+    let mut emitter = yaml_rust2::YamlEmitter::new(&mut out_str);
+    emitter.dump(&yaml::Yaml::Hash(v))?;
+
+    // Prefix with the magic comment
+    out_str.insert_str(0, "#cloud-config\n");
+    Ok(out_str)
+}
+
 impl FromSRBOpts {
     pub fn run(self) -> Result<()> {
         let image = self.image.as_str();
         let libvirt_opts = &self.libvirt_opts;
+        let connection = libvirt_opts.connection.clone();
+
+        if self.autodestroy {
+            if let Some(name) = self.name.as_deref() {
+                if crate::vm::vm_exists(connection, name)? {
+                    println!("Destroying existing VM: {}", name);
+                    crate::vm::delete_vm(connection, name)?;
+                } else {
+                    println!("No existing VM to autodestroy: {name}");
+                }
+            } else {
+                return Err(eyre!("Cannot use --autodestroy without specifying --name"));
+            }
+        }
 
         // For session installs, it's a pain to deal with the TCP port allocation
         // across reboots, so just make the domain always transient.
@@ -392,8 +422,9 @@ impl FromSRBOpts {
             vinstall.arg(format!("--qemu-commandline={qemu_commandline}"));
         }
 
+        let cloudinit = template_cloudinit(image, !self.remote)?;
         let mut cloud_init_tmpf = tempfile::NamedTempFile::new()?;
-        cloud_init_tmpf.write_all(CLOUDINIT.as_bytes())?;
+        cloud_init_tmpf.write_all(cloudinit.as_bytes())?;
         cloud_init_tmpf.flush()?;
         // SAFETY: should be utf-8
         let cloud_init_tmpf = cloud_init_tmpf.path().to_str().unwrap();
