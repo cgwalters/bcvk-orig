@@ -29,5 +29,5 @@ check:
     cargo check --all
 
 # Creates a container image build
-build-container:
+build:
     podman build -t ghcr.io/bootc-dev/kit .
