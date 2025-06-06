@@ -44,15 +44,23 @@ impl ImagesOpts {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct Image {
+pub struct ImageListEntry {
     pub names: Option<Vec<String>>,
+    pub id: String,
+    pub size: u64,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ImageInspect {
     pub id: String,
     pub size: u64,
     pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub(crate) fn inspect(name: &str) -> Result<Image> {
-    let mut r: Vec<Image> = hostexec::command("podman", None)?
+pub(crate) fn inspect(name: &str) -> Result<ImageListEntry> {
+    let mut r: Vec<ImageListEntry> = hostexec::command("podman", None)?
         .args(["image", "inspect", name])
         .run_and_parse_json()
         .map_err(|e| eyre::eyre!("{e}"))?;
@@ -100,8 +108,8 @@ pub(crate) fn query_osrelease(name: &str) -> Result<HashMap<String, String>> {
 }
 
 #[allow(dead_code)]
-pub fn list() -> Result<Vec<Image>> {
-    let images: Vec<Image> = hostexec::command("podman", None)?
+pub fn list() -> Result<Vec<ImageListEntry>> {
+    let images: Vec<ImageListEntry> = hostexec::command("podman", None)?
         .args([
             "images",
             "--format",

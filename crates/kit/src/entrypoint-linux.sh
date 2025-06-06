@@ -22,4 +22,4 @@ args+=(--read-only --read-only-tmpfs -v /tmp:/tmp)
 # Default to passing through the current working directory.
 args+=(-v $(pwd):/run/context -w /run/context)
 # And spawn the container.
-exec podman run $BCK_CONTAINER_ARGS ${args[@]} "${BOOTC_KIT_IMAGE}" "$@"
+exec podman run ${BCK_CONTAINER_ARGS:-} ${args[@]} "${BOOTC_KIT_IMAGE}" "$@"
