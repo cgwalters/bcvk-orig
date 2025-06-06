@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.dependencies]
 color-eyre = "0.6"
+const_format = "0.2"
 cfg-if = "1.0.0"
 rand = "0.9"
 tracing = "0.1"

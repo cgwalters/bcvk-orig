@@ -81,7 +81,7 @@ Requires=bootc-reinstall-pull.service
 [Service]
 Type=oneshot
 EnvironmentFile=/run/bootc-container-target
-ExecStart=podman run --rm --privileged -v /dev:/dev -v /:/target -v /var/lib/containers:/var/lib/containers --pid=host --security-opt label=type:unconfined_t $BOOTC_IMAGE bootc install to-existing-root --skip-fetch-check
+ExecStart=podman run --rm --privileged -v /dev:/dev -v /:/target -v /var/lib/containers:/var/lib/containers --pid=host --security-opt label=type:unconfined_t $BOOTC_IMAGE bootc install to-existing-root --skip-fetch-check --acknowledge-destructive
 ExecStart=/usr/sbin/reboot
 
 [Install]

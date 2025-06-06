@@ -38,10 +38,24 @@ pub(crate) enum OperatingSystem {
 }
 
 impl OperatingSystem {
-    fn cloud_url(&self) -> &'static str {
+    const fn cloud_url(&self) -> &'static str {
         match self {
-            Self::Fedora => "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
-            Self::CentOSStream10 => todo!(),
+            Self::Fedora => const_format::concatcp!(
+                "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/",
+                std::env::consts::ARCH,
+                "/images/Fedora-Cloud-Base-Generic-42-1.1.",
+                std::env::consts::ARCH,
+                ".qcow2"
+            ),
+            Self::CentOSStream10 => const_format::concatcp!(
+                "https://cloud.centos.org/centos/10-stream/",
+                std::env::consts::ARCH,
+                "/images/CentOS-Stream-GenericCloud-",
+                std::env::consts::ARCH,
+                "-10-20250529.0.",
+                std::env::consts::ARCH,
+                ".qcow2"
+            ),
         }
     }
 
@@ -188,7 +202,13 @@ fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) ->
 
     let url = os.cloud_url();
     tracing::debug!("Fetching {url}");
-    let r = reqwest::blocking::get(url)
+    let client = reqwest::blocking::ClientBuilder::new()
+        .user_agent(format!("bootc-kit/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .unwrap();
+    let r = client
+        .get(url)
+        .send()
         .and_then(|v| v.error_for_status())
         .wrap_err_with(|| format!("Fetching {url}"))?;
     let Some(size) = r.content_length() else {
