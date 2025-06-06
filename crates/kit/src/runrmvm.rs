@@ -82,7 +82,7 @@ impl RunRmVmOpts {
             skip_bind_storage: false,
             autodestroy: false,
             base_volume: None,
-            name: Some(vm_name.clone()),
+            name: vm_name.clone(),
             sshkey: Some(sshkey_path.clone()),
             size: self.size,
             vcpus: self.vcpus,

@@ -108,6 +108,9 @@ pub struct FromSRBOpts {
     /// Name of the image to install
     pub image: String,
 
+    /// Name for the virtual machine
+    pub name: String,
+
     /// Set to true to fetch directly from a remote registry
     #[clap(long)]
     pub remote: bool,
@@ -125,10 +128,6 @@ pub struct FromSRBOpts {
     /// which should hold an image.
     #[clap(long)]
     pub base_volume: Option<String>,
-
-    /// Name for the virtual machine
-    #[clap(long)]
-    pub name: Option<String>,
 
     /// Automatically destroy an existing VM with this name
     #[clap(long, short = 'D')]
@@ -333,20 +332,17 @@ fn template_cloudinit(image: &str, local: bool) -> Result<String> {
 
 impl FromSRBOpts {
     pub fn run(self) -> Result<()> {
+        let vmname = self.name.as_str();
         let image = self.image.as_str();
         let libvirt_opts = &self.libvirt_opts;
         let connection = libvirt_opts.connection.clone();
 
         if self.autodestroy {
-            if let Some(name) = self.name.as_deref() {
-                if crate::vm::vm_exists(connection, name)? {
-                    println!("Destroying existing VM: {}", name);
-                    crate::vm::delete_vm(connection, name)?;
-                } else {
-                    println!("No existing VM to autodestroy: {name}");
-                }
+            if crate::vm::vm_exists(connection, vmname)? {
+                println!("Destroying existing VM: {}", vmname);
+                crate::vm::delete_vm(connection, vmname)?;
             } else {
-                return Err(eyre!("Cannot use --autodestroy without specifying --name"));
+                println!("No existing VM to autodestroy: {vmname}");
             }
         }
 
@@ -381,7 +377,7 @@ impl FromSRBOpts {
         ]);
         vinstall.args(transient.then_some("--transient"));
         vinstall.arg(format!("--os-variant={}", os.osinfo_name()));
-        vinstall.args(self.name.map(|name| format!("--name={name}")));
+        vinstall.arg(format!("--name={vmname}"));
         vinstall.arg(format!(
             "--metadata=description=bootc-kit cloud installation of {image}"
         ));
