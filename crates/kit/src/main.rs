@@ -4,7 +4,7 @@ use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
 use tracing::instrument;
-use virtinstall::VirtInstallOpts;
+use virtinstall::LibvirtOpts;
 
 pub(crate) mod containerenv;
 mod entrypoint;
@@ -56,7 +56,7 @@ enum Commands {
     #[clap(subcommand)]
     Images(images::ImagesOpts),
     #[clap(subcommand)]
-    VirtInstall(VirtInstallOpts),
+    Libvirt(LibvirtOpts),
     /// Initialize bootc-kit infrastructure
     Init(init::InitOpts),
     /// Run a bootc container in an ephemeral VM
@@ -97,7 +97,7 @@ fn main() -> Result<(), Report> {
             hostexec::run(opts.bin, opts.args)?;
         }
         Commands::Images(opts) => opts.run()?,
-        Commands::VirtInstall(opts) => opts.run()?,
+        Commands::Libvirt(opts) => opts.run()?,
         Commands::Init(opts) => opts.run()?,
         Commands::RunRmVm(opts) => opts.run()?,
         Commands::Entrypoint(_opts) => {

@@ -103,7 +103,7 @@ fn libvirt_storage_pool() -> &'static str {
 }
 
 #[derive(clap::Subcommand, Debug)]
-pub(crate) enum VirtInstallOpts {
+pub(crate) enum LibvirtOpts {
     SyncCloudImage {
         #[clap(flatten)]
         libvirt_opts: LibvirtGenericOpts,
@@ -111,7 +111,7 @@ pub(crate) enum VirtInstallOpts {
         #[clap(long)]
         force: bool,
     },
-    FromSRB(FromSRBOpts),
+    InstallFromSRB(FromSRBOpts),
 }
 
 #[derive(Parser, Debug)]
@@ -166,15 +166,15 @@ pub struct FromSRBOpts {
     pub vinstarg: Vec<String>,
 }
 
-impl VirtInstallOpts {
+impl LibvirtOpts {
     pub fn run(self) -> Result<()> {
         match self {
-            VirtInstallOpts::SyncCloudImage {
+            LibvirtOpts::SyncCloudImage {
                 libvirt_opts,
                 os,
                 force,
             } => sync(&libvirt_opts, &os, force),
-            VirtInstallOpts::FromSRB(opts) => opts.run(),
+            LibvirtOpts::InstallFromSRB(opts) => opts.run(),
         }
     }
 }

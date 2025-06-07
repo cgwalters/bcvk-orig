@@ -15,7 +15,7 @@ use rand::distr::SampleString;
 use tempfile::TempDir;
 use tracing::instrument;
 
-use crate::{hostexec, images, virtinstall::FromSRBOpts, virtinstall::VirtInstallOpts};
+use crate::{hostexec, images, virtinstall::FromSRBOpts, virtinstall::LibvirtOpts};
 
 /// Options for the run-rmvm command
 #[derive(Parser, Debug)]
@@ -74,7 +74,7 @@ impl RunRmVmOpts {
         let vm_name = format!("bootc-ephemeral-{}", random_suffix);
 
         // Set up virt-install options
-        let virt_install_opts = VirtInstallOpts::FromSRB(FromSRBOpts {
+        let libvirt_opts = LibvirtOpts::InstallFromSRB(FromSRBOpts {
             libvirt_opts: Default::default(),
             image: self.image.clone(),
             remote: false,
@@ -91,7 +91,7 @@ impl RunRmVmOpts {
         });
 
         // Run virt-install to create the VM
-        virt_install_opts.run()?;
+        libvirt_opts.run()?;
 
         // Wait for the VM to be ready and connect via SSH
         println!("VM is being created. Waiting for it to be ready...");
