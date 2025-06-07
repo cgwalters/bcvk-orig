@@ -26,6 +26,12 @@ RUN --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root \
     make && make install DESTDIR=/out
 
+# This "build" just runs our unit tests
+FROM buildroot as units
+ARG unitargs
+RUN --mount=type=cache,target=/build/target --mount=type=cache,target=/var/roothome \
+    cargo test --locked $unitargs
+
 FROM base
 COPY --from=buildroot /out/ /
 ENTRYPOINT ["bootc-kit"]
