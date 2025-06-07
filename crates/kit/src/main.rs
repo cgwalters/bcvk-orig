@@ -13,7 +13,6 @@ mod hostexec;
 mod images;
 mod init;
 mod podman;
-mod runrmvm;
 mod sshcred;
 mod utils;
 mod virtinstall;
@@ -59,8 +58,6 @@ enum Commands {
     Libvirt(LibvirtOpts),
     /// Initialize bootc-kit infrastructure
     Init(init::InitOpts),
-    /// Run a bootc container in an ephemeral VM
-    RunRmVm(runrmvm::RunRmVmOpts),
     /// Generate an entrypoint script
     Entrypoint(EntrypointOpts),
     #[clap(hide = true)]
@@ -99,7 +96,6 @@ fn main() -> Result<(), Report> {
         Commands::Images(opts) => opts.run()?,
         Commands::Libvirt(opts) => opts.run()?,
         Commands::Init(opts) => opts.run()?,
-        Commands::RunRmVm(opts) => opts.run()?,
         Commands::Entrypoint(_opts) => {
             entrypoint::print_entrypoint_script()?;
         }
