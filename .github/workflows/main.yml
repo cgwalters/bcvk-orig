@@ -24,6 +24,9 @@ jobs:
 
       - name: build
         run: sudo just build
+
+      - name: units
+        run: sudo just unittest
         
       - name: Push the container image
         if: github.event_name == 'push'
