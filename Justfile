@@ -11,3 +11,7 @@ unittest *ARGS:
 # Run this before committing
 fmt:
     cargo fmt
+
+# This is a wrapper for bck because it overrides the default image
+run *ARGS: build
+    env BOOTC_KIT_IMAGE={{ image }} bck {{ ARGS }}
