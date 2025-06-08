@@ -13,7 +13,9 @@ use crate::hostexec;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum LibvirtConnection {
+    #[clap(alias = "qemu:///session")]
     Session,
+    #[clap(alias = "qemu:///system")]
     System,
 }
 

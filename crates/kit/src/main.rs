@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
+use libvirt::LibvirtOpts;
 use tracing::instrument;
-use virtinstall::LibvirtOpts;
 
 pub(crate) mod containerenv;
 mod entrypoint;
@@ -12,10 +12,10 @@ mod envdetect;
 mod hostexec;
 mod images;
 mod init;
+mod libvirt;
 mod podman;
 mod sshcred;
 mod utils;
-mod virtinstall;
 mod vm;
 
 #[derive(Parser)]
@@ -52,9 +52,10 @@ enum DebugInternalsCmds {
 enum Commands {
     /// Execute a command in the host context
     Hostexec(HostExecOpts),
+    /// Commands for bootc container imges
     #[clap(subcommand)]
     Images(images::ImagesOpts),
-    #[clap(subcommand)]
+    /// Commands for manipulating resources stored in libvirt
     Libvirt(LibvirtOpts),
     /// Initialize bootc-kit infrastructure
     Init(init::InitOpts),
