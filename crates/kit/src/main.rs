@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
-use libvirt::LibvirtOpts;
 use tracing::instrument;
+use libvirt::LibvirtOpts;
 
 pub(crate) mod containerenv;
 mod entrypoint;
@@ -16,7 +16,7 @@ mod libvirt;
 mod podman;
 mod sshcred;
 mod utils;
-mod vm;
+mod virtinstall;
 
 #[derive(Parser)]
 struct Cli {
@@ -64,6 +64,7 @@ enum Commands {
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
 }
+
 
 fn install_tracing() {
     use tracing_error::ErrorLayer;
