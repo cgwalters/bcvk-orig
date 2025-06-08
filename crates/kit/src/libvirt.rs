@@ -184,30 +184,26 @@ impl LibvirtOpts {
 
 #[instrument]
 fn list_vms(connection: LibvirtConnection) -> Result<()> {
-    // Use virsh list to get all VMs, including stopped ones
-    let output = virsh_command(connection)?
-        .args(["list", "--all", "--name"])
-        .run_get_string()
-        .map_err(|e| eyre!("Failed to list VMs: {e}"))?;
-    let vms = output
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>();
-
-    if vms.is_empty() {
-        println!("No VMs found");
-        return Ok(());
-    }
-
-    // Find VMs created by bootc-kit by checking their description metadata
-    for vmname in vms {
+    let domains = crate::vm::domain_list(connection)?;
+    for domain in domains {
+        let name = domain.name.as_str();
+        let state = &domain.state;
         let desc = virsh_command(connection)?
-            .args(["desc", vmname])
+            .args(["desc", name])
             .run_get_string()
             .map_err(|e| eyre!("Failed to get description of VM: {e}"))?;
         if desc.contains("bootc-kit") {
-            println!("{}", vmname);
+            if domain.is_running() {
+                let domifaddr = crate::vm::get_vm_domifaddr(connection, name)?;
+                let ip = domifaddr
+                    .as_ref()
+                    .and_then(|v| v.addr.rsplit_once('/'))
+                    .map(|v| v.0)
+                    .unwrap_or("-");
+                println!("{name} {state} {ip}");
+            } else {
+                println!("{name} {state}");
+            }
         }
     }
     Ok(())
@@ -390,7 +386,7 @@ impl FromSRBOpts {
         let image = self.image.as_str();
 
         if self.autodestroy {
-            if crate::vm::vm_exists(connection, vmname)? {
+            if crate::vm::domain_exists(connection, vmname)? {
                 println!("Destroying existing VM: {}", vmname);
                 crate::vm::delete_vm(connection, vmname)?;
             } else {
