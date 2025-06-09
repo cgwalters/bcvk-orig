@@ -11,6 +11,7 @@ use color_eyre::{
 };
 use itertools::Itertools;
 use tracing::instrument;
+use virt::connect::Connect;
 
 use crate::hostexec;
 
@@ -38,6 +39,18 @@ impl Default for LibvirtConnection {
     }
 }
 
+impl FromStr for LibvirtConnection {
+    type Err = eyre::Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "session" | "qemu:///session" => Ok(LibvirtConnection::Session),
+            "system" | "qemu:///system" => Ok(LibvirtConnection::System),
+            _ => Err(eyre!("Invalid libvirt connection: {}", s)),
+        }
+    }
+}
+
 pub(crate) fn libvirt_storage_pool() -> &'static str {
     static POOL: OnceLock<String> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -49,7 +62,7 @@ pub(crate) fn libvirt_storage_pool() -> &'static str {
 pub(crate) struct LibvirtOpts {
     /// Connection to libvirt
     #[clap(long, short = 'c', default_value = "session")]
-    connection: LibvirtConnection,
+    connection: String,
 
     #[clap(subcommand)]
     subcommand: LibvirtCommand,
@@ -57,12 +70,16 @@ pub(crate) struct LibvirtOpts {
 
 impl LibvirtOpts {
     pub fn run(self) -> Result<()> {
+        let conn = Connect::open(Some(&self.connection))?;
+        let uri = conn.get_uri()?;
+        println!("Connected to: {uri}");
+        let connection = LibvirtConnection::from_str(uri.as_str())?;
         match self.subcommand {
             LibvirtCommand::SyncCloudImage { os, force } => {
-                crate::virtinstall::sync(self.connection, &os, force)
+                crate::virtinstall::sync(connection, &os, force)
             }
-            LibvirtCommand::InstallFromSRB(opts) => opts.run(self.connection),
-            LibvirtCommand::List => crate::virtinstall::list_vms(self.connection),
+            LibvirtCommand::InstallFromSRB(opts) => opts.run(connection),
+            LibvirtCommand::List => crate::virtinstall::list_vms(&conn, connection),
         }
     }
 }

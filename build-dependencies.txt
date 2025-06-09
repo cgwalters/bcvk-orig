@@ -4,3 +4,5 @@ cargo rustc
 git-core
 # C dependencies
 pkgconfig(openssl)
+libvirt-libs
+libvirt-devel

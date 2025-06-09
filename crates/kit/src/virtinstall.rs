@@ -15,6 +15,7 @@ use color_eyre::{
 use indicatif::{ProgressBar, ProgressStyle};
 
 use tracing::instrument;
+use virt::connect::Connect;
 
 use crate::init::DEFAULT_CSTOR_DIST_PORT;
 use crate::libvirt::{libvirt_storage_pool, virsh_command, LibvirtConnection};
@@ -140,7 +141,7 @@ pub struct FromSRBOpts {
 }
 
 #[instrument]
-pub(crate) fn list_vms(connection: LibvirtConnection) -> Result<()> {
+pub(crate) fn list_vms(conn: &Connect, connection: LibvirtConnection) -> Result<()> {
     let domains = crate::libvirt::domain_list(connection)?;
     for domain in domains {
         let name = domain.name.as_str();
