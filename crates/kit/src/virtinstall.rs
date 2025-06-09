@@ -6,6 +6,9 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::init::DEFAULT_CSTOR_DIST_PORT;
+use crate::libvirt::{libvirt_storage_pool, virsh_command, LibvirtConnection};
+use crate::{hostexec, images, sshcred};
 use bootc_utils::CommandRunExt;
 use clap::Parser;
 use color_eyre::{
@@ -13,13 +16,8 @@ use color_eyre::{
     Result,
 };
 use indicatif::{ProgressBar, ProgressStyle};
-
 use tracing::instrument;
 use virt::connect::Connect;
-
-use crate::init::DEFAULT_CSTOR_DIST_PORT;
-use crate::libvirt::{libvirt_storage_pool, virsh_command, LibvirtConnection};
-use crate::{hostexec, images, sshcred};
 
 const REINSTALL_SCRIPT: &str = include_str!("reinstall.py");
 
@@ -141,28 +139,38 @@ pub struct FromSRBOpts {
 }
 
 #[instrument]
-pub(crate) fn list_vms(conn: &Connect, connection: LibvirtConnection) -> Result<()> {
-    let domains = crate::libvirt::domain_list(connection)?;
+pub(crate) fn list_vms(conn: &Connect) -> Result<()> {
+    let domains = conn.list_all_domains(0)?;
     for domain in domains {
-        let name = domain.name.as_str();
-        let state = &domain.state;
-        let desc = virsh_command(connection)?
-            .args(["desc", name])
-            .run_get_string()
-            .map_err(|e| eyre!("Failed to get description of VM: {e}"))?;
-        if desc.contains("bootc-kit") {
-            if domain.is_running() {
-                let domifaddr = crate::libvirt::get_vm_domifaddr(connection, name)?;
-                let ip = domifaddr
-                    .as_ref()
-                    .and_then(|v| v.addr.rsplit_once('/'))
-                    .map(|v| v.0)
-                    .unwrap_or("-");
-                println!("{name} {state} {ip}");
-            } else {
-                println!("{name} {state}");
+        let name = domain.get_name()?;
+        let desc =
+            match domain.get_metadata(virt::sys::VIR_DOMAIN_METADATA_DESCRIPTION as i32, None, 0) {
+                Ok(r) => Some(r),
+                Err(e) if e.code() == virt::error::ErrorNumber::NoDomainMetadata => None,
+                Err(e) => return Err(e.into()),
+            };
+        if let Some(desc) = desc {
+            if !desc.contains("bootc-kit") {
+                continue;
             }
         }
+        let state = domain.get_state()?.0;
+        let state_str = crate::libvirt::get_state_str(state)?;
+        print!("{name} {state_str}");
+        if state == virt::sys::VIR_DOMAIN_RUNNING {
+            print!(" ");
+            let interfaces = domain
+                .interface_addresses(virt::sys::VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)?;
+            for iface in interfaces {
+                let name = &iface.name;
+                for addr in iface.addrs {
+                    let ip = addr.addr;
+                    let prefix = addr.prefix;
+                    print!(" {name}:{ip}/{prefix}");
+                }
+            }
+        }
+        println!("");
     }
     Ok(())
 }

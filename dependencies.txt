@@ -1,4 +1,7 @@
 # For debugging
 strace
 # virtualization
-qemu-kvm
+libvirt-libs
+libvirt-daemon-driver-qemu
+
+

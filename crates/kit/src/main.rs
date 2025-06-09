@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
-use tracing::instrument;
 use libvirt::LibvirtOpts;
+use tracing::instrument;
 
 pub(crate) mod containerenv;
 mod entrypoint;
@@ -64,7 +64,6 @@ enum Commands {
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
 }
-
 
 fn install_tracing() {
     use tracing_error::ErrorLayer;

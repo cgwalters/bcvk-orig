@@ -195,6 +195,7 @@ dependencies = [
  "tracing-error",
  "tracing-subscriber",
  "virt",
+ "virt-sys",
  "xshell",
  "yaml-rust2",
 ]

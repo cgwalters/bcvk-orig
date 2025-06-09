@@ -33,6 +33,7 @@ cfg-if = { workspace = true }
 indoc = "2.0.6"
 itertools = "0.14.0"
 virt = { version = "0.4.2", features = ["qemu"] }
+virt-sys = "0.3"
 
 [dev-dependencies]
 similar-asserts = "1.5"
