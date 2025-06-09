@@ -2,17 +2,20 @@
 //!
 //! In the future we may replace this with https://gitlab.com/libvirt/libvirt-rust
 
-use std::{fmt::Display, process::Command, str::FromStr, sync::OnceLock};
+use std::{process::Command, str::FromStr, sync::OnceLock};
 
-use bootc_utils::CommandRunExt;
+use bootc_utils::CommandRunExt as _;
 use color_eyre::{
     eyre::{self, eyre},
     Result,
 };
-use itertools::Itertools;
-use tracing::instrument;
 
-use crate::hostexec;
+use tracing::instrument;
+use virt::{
+    connect::Connect,
+    domain::Domain,
+    sys::{VIR_DOMAIN_PAUSED, VIR_DOMAIN_RUNNING, VIR_DOMAIN_SHUTOFF},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -38,6 +41,18 @@ impl Default for LibvirtConnection {
     }
 }
 
+impl FromStr for LibvirtConnection {
+    type Err = eyre::Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "session" | "qemu:///session" => Ok(LibvirtConnection::Session),
+            "system" | "qemu:///system" => Ok(LibvirtConnection::System),
+            _ => Err(eyre!("Invalid libvirt connection: {}", s)),
+        }
+    }
+}
+
 pub(crate) fn libvirt_storage_pool() -> &'static str {
     static POOL: OnceLock<String> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -49,7 +64,7 @@ pub(crate) fn libvirt_storage_pool() -> &'static str {
 pub(crate) struct LibvirtOpts {
     /// Connection to libvirt
     #[clap(long, short = 'c', default_value = "session")]
-    connection: LibvirtConnection,
+    connection: String,
 
     #[clap(subcommand)]
     subcommand: LibvirtCommand,
@@ -57,12 +72,15 @@ pub(crate) struct LibvirtOpts {
 
 impl LibvirtOpts {
     pub fn run(self) -> Result<()> {
+        let conn = Connect::open(Some(&self.connection))?;
+        let uri = conn.get_uri()?;
+        let connection = LibvirtConnection::from_str(uri.as_str())?;
         match self.subcommand {
             LibvirtCommand::SyncCloudImage { os, force } => {
-                crate::virtinstall::sync(self.connection, &os, force)
+                crate::virtinstall::sync(connection, &os, force)
             }
-            LibvirtCommand::InstallFromSRB(opts) => opts.run(self.connection),
-            LibvirtCommand::List => crate::virtinstall::list_vms(self.connection),
+            LibvirtCommand::InstallFromSRB(opts) => opts.run(connection),
+            LibvirtCommand::List => crate::virtinstall::list_vms(&conn),
         }
     }
 }
@@ -82,94 +100,19 @@ pub(crate) enum LibvirtCommand {
     List,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VMState {
-    Running,
-    Paused,
-    Stopped,
-    Other(String),
-}
-
-impl FromStr for VMState {
-    type Err = eyre::Report;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "running" => Ok(VMState::Running),
-            "paused" => Ok(VMState::Paused),
-            "shut off" => Ok(VMState::Stopped),
-            other => Ok(VMState::Other(other.to_string())),
-        }
-    }
-}
-
-impl Display for VMState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VMState::Running => write!(f, "running"),
-            VMState::Paused => write!(f, "paused"),
-            VMState::Stopped => write!(f, "shut off"),
-            VMState::Other(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LibvirtVM {
-    pub id: Option<u64>,
-    pub name: String,
-    pub state: VMState,
-}
-
-impl LibvirtVM {
-    pub fn is_running(&self) -> bool {
-        matches!(self.state, VMState::Running)
-    }
-}
-
 pub fn virsh_command(connection: LibvirtConnection) -> Result<Command> {
-    let mut r = hostexec::command("virsh", None)?;
+    let mut r = crate::hostexec::command("virsh", None)?;
     r.args(["-c", connection.to_url()]);
     Ok(r)
 }
 
-fn parse_domain_list(output: &str) -> Result<Vec<LibvirtVM>> {
-    output
-        .lines()
-        .skip(2)
-        .try_fold(Vec::new(), |mut acc, line| {
-            // Skip empty lines
-            if line.trim().is_empty() {
-                return Ok(acc);
-            }
-
-            let mut parts = line.split_whitespace();
-            let Some(id) = parts.next() else {
-                return Err(eyre!("Invalid output from virsh list: {line}"));
-            };
-            let id = if id == "-" {
-                None
-            } else {
-                Some(id.parse::<u64>()?)
-            };
-            let Some(name) = parts.next().map(ToOwned::to_owned) else {
-                return Err(eyre!("Invalid output from virsh list: {line}"));
-            };
-            let state: String = parts.join(" ");
-            let state = VMState::from_str(&state)?;
-            acc.push(LibvirtVM { id, name, state });
-            Ok(acc)
-        })
-}
-
 #[instrument]
-/// List all virtual machines
-pub fn domain_list(connection: LibvirtConnection) -> Result<Vec<LibvirtVM>> {
-    let output = virsh_command(connection)?
-        .args(["list", "--all"])
-        .run_get_string()
-        .map_err(|e| eyre!("Listing VMs: {}", e))?;
-    parse_domain_list(&output)
+/// List all virtual machines using the virt crate
+pub fn domain_list(conn: &Connect) -> Result<Vec<Domain>> {
+    let r = conn.list_all_domains(
+        virt::sys::VIR_CONNECT_LIST_DOMAINS_ACTIVE | virt::sys::VIR_CONNECT_LIST_DOMAINS_INACTIVE,
+    )?;
+    Ok(r)
 }
 
 #[instrument]
@@ -198,95 +141,13 @@ pub fn delete_vm(connection: LibvirtConnection, name: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct DomifAddr {
-    pub name: String,
-    pub mac: String,
-    pub proto: String,
-    pub addr: String,
-}
-
-/// Get IP address of a VM
-#[instrument]
-pub fn get_vm_domifaddr(connection: LibvirtConnection, name: &str) -> Result<Option<DomifAddr>> {
-    let output = virsh_command(connection)?
-        .args(["domifaddr", name])
-        .run_get_string()
-        .map_err(|e| eyre!("Getting VM IP address: {}", e))?;
-    let mut output = output.lines().skip(2);
-    let Some(domifaddr) = output.next() else {
-        return Ok(None);
+pub(crate) fn get_state_str(state: virt::sys::virDomainState) -> Result<&'static str> {
+    let state = match state {
+        VIR_DOMAIN_RUNNING => "running",
+        VIR_DOMAIN_PAUSED => "paused",
+        VIR_DOMAIN_SHUTOFF => "shut off",
+        // TODO: support other states on demand
+        _ => "-",
     };
-    let [name, mac, proto, addr] = domifaddr
-        .split_ascii_whitespace()
-        .collect_array()
-        .ok_or_else(|| eyre!("Failed to parse domifaddr: {domifaddr}"))?;
-    let r = DomifAddr {
-        name: name.to_string(),
-        mac: mac.to_string(),
-        proto: proto.to_string(),
-        addr: addr.to_string(),
-    };
-    Ok(Some(r))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_domain_list_empty() {
-        let input = " Id   Name                      State
-------------------------------------------
-";
-        let result = parse_domain_list(input).unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_parse_domain_list_single() {
-        let input = " Id   Name                      State
-------------------------------------------
- 1    test-vm                   running";
-        let result = parse_domain_list(input).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "test-vm");
-        assert_eq!(result[0].state, VMState::Running);
-    }
-
-    #[test]
-    fn test_parse_domain_list_multiple() {
-        let input = " Id   Name                      State
-------------------------------------------
- 1    test-vm1                  running
- 2    test-vm2                  paused
- -    test-vm3                  shut off";
-        let result = parse_domain_list(input).unwrap();
-        assert_eq!(result.len(), 3);
-
-        assert_eq!(result[0].name, "test-vm1");
-        assert_eq!(result[0].state, VMState::Running);
-
-        assert_eq!(result[1].name, "test-vm2");
-        assert_eq!(result[1].state, VMState::Paused);
-
-        assert_eq!(result[2].name, "test-vm3");
-        assert_eq!(result[2].state, VMState::Stopped);
-    }
-
-    #[test]
-    fn test_parse_domain_list_invalid_state() {
-        let input = " Id   Name                      State
-------------------------------------------
- 1    test-vm                   unknown";
-        let result = parse_domain_list(input).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "test-vm");
-        if let VMState::Other(state) = &result[0].state {
-            assert_eq!(state, "unknown");
-        } else {
-            panic!("Expected VMState::Other");
-        }
-    }
+    Ok(state)
 }

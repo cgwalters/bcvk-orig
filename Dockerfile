@@ -10,6 +10,7 @@ dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noar
 grep -vE -e '^#' /run/deps/dependencies.txt | xargs dnf -y install
 dnf clean all
 rm -rf /var/{cache,tmp,log}/*
+# Another dummy change here
 EORUN
 
 FROM base as buildroot
