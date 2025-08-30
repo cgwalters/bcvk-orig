@@ -68,7 +68,7 @@ QEMU_ARGS=(
     -device vhost-user-fs-pci,queue-size=1024,chardev=char0,tag=rootfs
     -object memory-backend-memfd,id=mem,share=on,size={{MEMORY}}M
     -numa node,memdev=mem
-    -append "rootfstype=virtiofs root=rootfs selinux=0 systemd.volatile=overlay systemd.set_credential=passwd.plaintext-password.root:12345 {{EXTRA_ARGS}}"
+    -append "rootfstype=virtiofs root=rootfs selinux=0 systemd.volatile=overlay {{EXTRA_ARGS}}"
 )
 
 {{CONSOLE_QEMU_ARGS}}
