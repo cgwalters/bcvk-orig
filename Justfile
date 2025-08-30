@@ -1,18 +1,20 @@
-project := "bootc-dev/kit"
-image := "localhost/" + project
-
-# Creates a container image build
+# Build the native binary
 build *ARGS:
-    podman build -t {{ image }} {{ ARGS }} .
+    cargo build --release {{ ARGS }}
 
-unittest *ARGS:
-    podman build --jobs=4 --target units -t {{ image }}-units --build-arg=unitargs={{ARGS}} .
+# Run unit tests
+test *ARGS:
+    cargo test {{ ARGS }}
 
 # Run this before committing
 fmt:
     cargo fmt
 
-# This is a wrapper for bck because it overrides the default image
-run *ARGS: build
-    env BOOTC_KIT_IMAGE={{ image }} bck {{ ARGS }}
+# Run the binary directly
+run *ARGS:
+    cargo run --release -- {{ ARGS }}
+
+# Install the binary to ~/.local/bin
+install: build
+    cp target/release/bck ~/.local/bin/
 

@@ -8,7 +8,9 @@
       "Bash(git stash:*)",
       "Bash(git checkout:*)",
       "Bash(gh pr view:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }

@@ -17,6 +17,7 @@ mod podman;
 mod sshcred;
 mod utils;
 mod virtinstall;
+mod vm;
 
 #[derive(Parser)]
 struct Cli {
