@@ -14,10 +14,12 @@ mod images;
 mod init;
 mod libvirt;
 mod podman;
+mod qemu;
 mod run_ephemeral;
 mod sshcred;
 mod utils;
 mod virtinstall;
+mod virtiofsd;
 mod vm;
 
 #[derive(Parser)]
@@ -65,6 +67,9 @@ enum Commands {
     Entrypoint(EntrypointOpts),
     /// Run a container image as an ephemeral VM with direct kernel boot
     RunEphemeral(run_ephemeral::RunEphemeralOpts),
+    /// Code executed inside the target image
+    #[clap(hide = true)]
+    RunEphemeralImpl(run_ephemeral::RunEphemeralImplOpts),
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
 }
@@ -107,6 +112,7 @@ fn main() -> Result<(), Report> {
         Commands::RunEphemeral(opts) => {
             run_ephemeral::run(opts)?;
         }
+        Commands::RunEphemeralImpl(opts) => run_ephemeral::run_impl(opts)?,
         Commands::DebugInternals(opts) => match opts.command {
             DebugInternalsCmds::OpenTree { path } => {
                 let fd = rustix::mount::open_tree(

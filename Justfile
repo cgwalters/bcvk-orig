@@ -6,6 +6,10 @@ build *ARGS:
 test *ARGS:
     cargo test {{ ARGS }}
 
+# Run integration tests for run-ephemeral
+test-integration:
+    cd crates/kit && cargo test --test run_ephemeral
+
 # Run this before committing
 fmt:
     cargo fmt
