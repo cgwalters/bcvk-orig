@@ -4,12 +4,19 @@ use color_eyre::eyre::Context;
 use color_eyre::Result;
 
 #[derive(Debug)]
+pub struct VirtiofsMount {
+    pub socket_path: String,
+    pub tag: String,
+}
+
+#[derive(Debug)]
 pub struct QemuConfig {
     pub memory_mb: u32,
     pub vcpus: u32,
     pub kernel_path: String,
     pub initramfs_path: String,
     pub virtiofs_socket: String,
+    pub additional_mounts: Vec<VirtiofsMount>,
     pub kernel_cmdline: Vec<String>,
     pub enable_console: bool,
 }
@@ -43,6 +50,20 @@ pub fn spawn_qemu(config: &QemuConfig) -> Result<Child> {
         "-numa",
         "node,memdev=mem",
     ]);
+
+    // Add additional virtiofs mounts
+    for (idx, mount) in config.additional_mounts.iter().enumerate() {
+        let char_id = format!("char{}", idx + 1);
+        cmd.args([
+            "-chardev",
+            &format!("socket,id={},path={}", char_id, mount.socket_path),
+            "-device",
+            &format!(
+                "vhost-user-fs-pci,queue-size=1024,chardev={},tag={}",
+                char_id, mount.tag
+            ),
+        ]);
+    }
 
     if config.enable_console {
         cmd.args(["-serial", "stdio", "-display", "none"]);

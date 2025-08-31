@@ -6,9 +6,9 @@ build *ARGS:
 test *ARGS:
     cargo test {{ ARGS }}
 
-# Run integration tests for run-ephemeral
-test-integration:
-    cd crates/kit && cargo test --test run_ephemeral
+# Run integration tests
+test-integration: build
+    env BCK_PATH=target/release/bck cargo run -p integration-tests
 
 # Run this before committing
 fmt:
