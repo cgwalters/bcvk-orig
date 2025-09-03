@@ -17,6 +17,11 @@ pub struct SystemdConfig {
 }
 
 fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInfo>> {
+    // Check if we're in a toolbox environment - if so, we're on the host
+    if std::env::var("TOOLBOX_PATH").is_ok() {
+        return Ok(None);
+    }
+
     let hostenv = crate::envdetect::Environment::get_cached()?;
     if !hostenv.container {
         return Ok(None);

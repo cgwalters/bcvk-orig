@@ -7,6 +7,7 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use itertools::Itertools;
 use rustix::path::Arg;
+use tracing::debug;
 use tracing::{info, instrument};
 
 #[derive(Parser, Debug)]
