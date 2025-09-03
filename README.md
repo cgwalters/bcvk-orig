@@ -12,7 +12,7 @@ for `podman`. It does require a virt stack (qemu, virtiofsd)
 in the host environment.
 
 ```
-./target/release/bootc-kit run-ephemeral quay.io/fedora/fedora-bootc:42 --karg=systemd.unit=rescue.target --karg=systemd.setenv=SYSTEMD_SULOGIN_FORCE=1
+./target/release/bootc-kit run-ephemeral --rm -ti quay.io/fedora/fedora-bootc:42 --karg=systemd.unit=rescue.target --karg=systemd.setenv=SYSTEMD_SULOGIN_FORCE=1
 ```
 
 ## Goals

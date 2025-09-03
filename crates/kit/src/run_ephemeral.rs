@@ -38,6 +38,22 @@ pub struct RunEphemeralOpts {
     #[clap(long)]
     pub debug: bool,
 
+    /// Allocate a pseudo-TTY
+    #[clap(short = 't', long = "tty")]
+    pub tty: bool,
+
+    /// Keep STDIN open even if not attached
+    #[clap(short = 'i', long = "interactive")]
+    pub interactive: bool,
+
+    /// Run container in background and print container ID
+    #[clap(short = 'd', long = "detach")]
+    pub detach: bool,
+
+    /// Automatically remove the container when it exits
+    #[clap(long = "rm")]
+    pub rm: bool,
+
     /// Bind mount a host directory (read-write) into the VM at /mnt/<name>
     /// Format: <host-path>:<name> or <host-path> (uses basename as name)
     #[clap(long = "bind", value_name = "HOST_PATH[:NAME]")]
@@ -52,6 +68,10 @@ pub struct RunEphemeralOpts {
     /// The directory should contain 'system/' subdirectory with .service files
     #[clap(long = "systemd-units")]
     pub systemd_units_dir: Option<String>,
+
+    /// Log the full podman command line before executing
+    #[clap(long = "log-cmdline")]
+    pub log_cmdline: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -137,9 +157,24 @@ fn run_qemu_in_container(opts: &RunEphemeralOpts) -> Result<std::process::ExitSt
     let mut cmd = Command::new("podman");
     cmd.arg("run");
     cmd.arg(format!("--net={}", opts.net.as_str()));
+
+    // Add --rm flag based on user input (default: true)
+    if opts.rm {
+        cmd.arg("--rm");
+    }
+
+    // Add -t, -i, -d flags based on user input (mirror podman behavior)
+    if opts.tty {
+        cmd.arg("-t");
+    }
+    if opts.interactive {
+        cmd.arg("-i");
+    }
+    if opts.detach {
+        cmd.arg("-d");
+    }
+
     cmd.args([
-        "--rm",
-        "-it", // Interactive for console passthrough
         // Needed to create nested containers (mountns, etc). Note when running
         // with userns (podman unpriv default) this is totally safe. TODO:
         // Default to enabling userns when running rootful.
@@ -205,10 +240,18 @@ fn run_qemu_in_container(opts: &RunEphemeralOpts) -> Result<std::process::ExitSt
         cmd.args(["-e", "BOOTC_CONSOLE=1"]);
     }
 
-    let status = cmd
-        .args([&opts.image, "/run/entrypoint"])
-        .status()
-        .context("Failed to run QEMU in container")?;
+    cmd.args([&opts.image, "/run/entrypoint"]);
+
+    // Log the full command line if requested
+    if opts.log_cmdline {
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        eprintln!("Executing: podman {}", args.join(" "));
+    }
+
+    let status = cmd.status().context("Failed to run QEMU in container")?;
 
     Ok(status)
 }
