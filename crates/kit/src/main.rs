@@ -3,33 +3,24 @@ use std::ffi::OsString;
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
-use libvirt::LibvirtOpts;
 use tracing::instrument;
 
 pub(crate) mod containerenv;
-mod entrypoint;
 mod envdetect;
 mod hostexec;
 mod images;
-mod init;
-mod libvirt;
 mod podman;
 mod qemu;
 mod run_ephemeral;
 mod sshcred;
 mod utils;
-mod virtinstall;
 mod virtiofsd;
-mod vm;
 
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
-
-#[derive(Parser)]
-struct EntrypointOpts {}
 
 #[derive(Parser)]
 struct HostExecOpts {
@@ -59,12 +50,6 @@ enum Commands {
     /// Commands for bootc container imges
     #[clap(subcommand)]
     Images(images::ImagesOpts),
-    /// Commands for manipulating resources stored in libvirt
-    Libvirt(LibvirtOpts),
-    /// Initialize bootc-kit infrastructure
-    Init(init::InitOpts),
-    /// Generate an entrypoint script
-    Entrypoint(EntrypointOpts),
     /// Run a container image as an ephemeral VM with direct kernel boot
     RunEphemeral(run_ephemeral::RunEphemeralOpts),
     /// Code executed inside the target image
@@ -104,11 +89,6 @@ fn main() -> Result<(), Report> {
             hostexec::run(opts.bin, opts.args)?;
         }
         Commands::Images(opts) => opts.run()?,
-        Commands::Libvirt(opts) => opts.run()?,
-        Commands::Init(opts) => opts.run()?,
-        Commands::Entrypoint(_opts) => {
-            entrypoint::print_entrypoint_script()?;
-        }
         Commands::RunEphemeral(opts) => {
             run_ephemeral::run(opts)?;
         }
