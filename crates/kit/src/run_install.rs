@@ -320,7 +320,6 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_prepare_target_disk_file() -> Result<()> {

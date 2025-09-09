@@ -10,6 +10,7 @@ mod envdetect;
 mod hostexec;
 mod images;
 mod install_options;
+mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
@@ -119,12 +120,20 @@ enum Commands {
     #[clap(name = "run-install")]
     RunInstall(run_install::RunInstallOpts),
 
-    /// Upload bootc disk images to libvirt with metadata annotations
+    /// Manage libvirt integration for bootc containers
     ///
+    /// Comprehensive libvirt integration with subcommands for uploading disk images,
+    /// creating domains, and managing bootc containers as libvirt VMs.
+    #[clap(subcommand)]
+    Libvirt(libvirt::LibvirtCommands),
+
+    /// Upload bootc disk images to libvirt with metadata annotations (deprecated)
+    ///
+    /// This command is deprecated. Use 'libvirt upload' instead.
     /// Combines run-install with libvirt integration to create and upload
     /// disk images to libvirt storage pools. Automatically adds container
     /// image metadata as libvirt annotations for tracking and management.
-    #[clap(name = "libvirt-upload-disk")]
+    #[clap(name = "libvirt-upload-disk", hide = true)]
     LibvirtUploadDisk(libvirt_upload_disk::LibvirtUploadDiskOpts),
 
     /// Connect to running VMs via SSH
@@ -188,7 +197,13 @@ fn main() -> Result<(), Report> {
         Commands::RunInstall(opts) => {
             run_install::run(opts)?;
         }
+        Commands::Libvirt(cmd) => {
+            cmd.run()?;
+        }
         Commands::LibvirtUploadDisk(opts) => {
+            eprintln!(
+                "Warning: 'libvirt-upload-disk' is deprecated. Use 'libvirt upload' instead."
+            );
             libvirt_upload_disk::run(opts)?;
         }
         Commands::Ssh(opts) => {

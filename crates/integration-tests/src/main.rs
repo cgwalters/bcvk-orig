@@ -8,6 +8,7 @@ use xshell::{cmd, Shell};
 
 mod tests {
     pub mod libvirt_upload_disk;
+    pub mod libvirt_verb;
     pub mod mount_feature;
     pub mod run_ephemeral;
     pub mod run_install;
@@ -215,6 +216,63 @@ fn main() {
         }),
         Trial::test("libvirt_upload_disk_invalid_size", || {
             tests::libvirt_upload_disk::test_libvirt_upload_disk_invalid_size();
+            Ok(())
+        }),
+        // New libvirt verb tests
+        Trial::test("libvirt_verb_help", || {
+            tests::libvirt_verb::test_libvirt_verb_help();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_help", || {
+            tests::libvirt_verb::test_libvirt_upload_help();
+            Ok(())
+        }),
+        Trial::test("libvirt_create_help", || {
+            tests::libvirt_verb::test_libvirt_create_help();
+            Ok(())
+        }),
+        Trial::test("libvirt_list_help", || {
+            tests::libvirt_verb::test_libvirt_list_help();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_workflow", || {
+            tests::libvirt_verb::test_libvirt_upload_workflow();
+            Ok(())
+        }),
+        Trial::test("libvirt_create_validation", || {
+            tests::libvirt_verb::test_libvirt_create_validation();
+            Ok(())
+        }),
+        Trial::test("libvirt_list_functionality", || {
+            tests::libvirt_verb::test_libvirt_list_functionality();
+            Ok(())
+        }),
+        Trial::test("libvirt_list_json_output", || {
+            tests::libvirt_verb::test_libvirt_list_json_output();
+            Ok(())
+        }),
+        Trial::test("libvirt_create_resource_options", || {
+            tests::libvirt_verb::test_libvirt_create_resource_options();
+            Ok(())
+        }),
+        Trial::test("libvirt_create_networking", || {
+            tests::libvirt_verb::test_libvirt_create_networking();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_create_integration", || {
+            tests::libvirt_verb::test_libvirt_upload_create_integration();
+            Ok(())
+        }),
+        Trial::test("libvirt_ssh_integration", || {
+            tests::libvirt_verb::test_libvirt_ssh_integration();
+            Ok(())
+        }),
+        Trial::test("libvirt_vm_lifecycle", || {
+            tests::libvirt_verb::test_libvirt_vm_lifecycle();
+            Ok(())
+        }),
+        Trial::test("libvirt_error_handling", || {
+            tests::libvirt_verb::test_libvirt_error_handling();
             Ok(())
         }),
     ];
