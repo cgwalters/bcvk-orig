@@ -459,7 +459,7 @@ pub fn run_qemu_in_container(
         let temp_dir = tempfile::tempdir()
             .context("Failed to create temporary directory for execute output")?;
         let output_file = temp_dir.path().join("execute-output.txt");
-        let status_file = temp_dir.path().join("execute-status.json");
+        let status_file = temp_dir.path().join("execute-status.txt");
 
         debug!(
             "Created temporary directory for execute output at: {:?}",
@@ -487,7 +487,7 @@ pub fn run_qemu_in_container(
         // Add virtio-serial devices for execute output and status (using the mounted paths)
         all_serial_devices.push(format!("execute:/run/execute-output/execute-output.txt"));
         all_serial_devices.push(format!(
-            "execute-status:/run/execute-output/execute-status.json"
+            "executestatus:/run/execute-output/execute-status.txt"
         ));
 
         cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
@@ -661,24 +661,23 @@ pub fn run_qemu_in_container(
         debug!("Checking for execute status file: {:?}", status_file);
         if status_file.exists() {
             debug!("Status file exists, reading content");
-            match std::fs::read_to_string(&status_file) {
-                Ok(status_content) => {
-                    debug!("Read status content: {}", status_content);
-                    if let Some(exit_code) = parse_exit_status_json(&status_content) {
-                        debug!("Parsed exit code from status: {}", exit_code);
-                        Some(exit_code)
-                    } else {
-                        debug!("Failed to parse exit code from status JSON");
-                        None
-                    }
-                }
-                Err(e) => {
-                    debug!("Failed to read status file: {}", e);
-                    None
-                }
+            let r = std::fs::read_to_string(&status_file)?;
+            let lines = r.lines();
+            let mut code = None;
+            for line in lines {
+                let Some(codeval) = line.strip_prefix("ExecMainStatus=") else {
+                    continue;
+                };
+                let codeval: i32 = codeval.parse().context("Parsing ExecMainStatus")?;
+                code = Some(codeval);
+                break;
             }
+            if code.is_none() {
+                tracing::warn!("Failed to find ExecMainStatus");
+            }
+            code
         } else {
-            debug!("Status file does not exist");
+            tracing::warn!("Missing status file");
             None
         }
     } else {
@@ -721,18 +720,6 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
 
     debug!("VM terminated successfully");
     Ok(())
-}
-
-/// Parse command exit status from JSON: {"exit_code": N, "completed": true}
-fn parse_exit_status_json(content: &str) -> Option<i32> {
-    if let Ok(status_json) = serde_json::from_str::<serde_json::Value>(content) {
-        status_json
-            .get("exit_code")
-            .and_then(|v| v.as_i64())
-            .map(|code| code as i32)
-    } else {
-        None
-    }
 }
 
 /// Process --mount-disk-file specs: parse file:name format, create sparse files if needed (2x image size),
@@ -883,53 +870,6 @@ fn inject_systemd_units() -> Result<()> {
 
     debug!("Systemd unit injection complete");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_exit_status_json_success() {
-        let json_content = r#"{"exit_code": 0, "completed": true}"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, Some(0));
-    }
-
-    #[test]
-    fn test_parse_exit_status_json_failure() {
-        let json_content = r#"{"exit_code": 42, "completed": true}"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, Some(42));
-    }
-
-    #[test]
-    fn test_parse_exit_status_json_negative() {
-        let json_content = r#"{"exit_code": -1, "completed": true}"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, Some(-1));
-    }
-
-    #[test]
-    fn test_parse_exit_status_json_invalid_json() {
-        let json_content = r#"invalid json"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_exit_status_json_missing_field() {
-        let json_content = r#"{"completed": true}"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_exit_status_json_wrong_type() {
-        let json_content = r#"{"exit_code": "not_a_number", "completed": true}"#;
-        let result = parse_exit_status_json(json_content);
-        assert_eq!(result, None);
-    }
 }
 
 /// RAII guard for automatic virtiofsd process cleanup on drop.
@@ -1200,122 +1140,47 @@ WantedBy=local-fs.target
             fs::create_dir_all("/run/systemd-units/system/default.target.wants")?;
         }
 
-        // Create wrapper script that handles exit code capture and streams output in real-time
-        let wrapper_script = format!(
-            r#"#!/bin/bash
-set +e  # Don't exit on command failure
-echo "Starting execute command: {exec_cmd}" >&2
-
-# Function to wait for virtio-serial devices with retry logic
-wait_for_virtio_devices() {{
-    echo "Waiting for virtio-serial devices..." >&2
-    local max_attempts=30
-    local attempt=1
-    
-    while [ $attempt -le $max_attempts ]; do
-        if [ -e /dev/virtio-ports/execute ] && [ -e /dev/virtio-ports/execute-status ]; then
-            echo "Virtio-serial devices are ready" >&2
-            return 0
-        fi
-        
-        echo "Attempt $attempt/$max_attempts: Waiting for virtio-serial devices..." >&2
-        sleep 1
-        attempt=$((attempt + 1))
-    done
-    
-    echo "ERROR: Virtio-serial devices not available after $max_attempts attempts" >&2
-    echo "Available devices:" >&2
-    ls -la /dev/virtio-ports/ 2>&1 || echo "No virtio-ports directory found" >&2
-    return 1
-}}
-
-# Wait for devices before proceeding
-if ! wait_for_virtio_devices; then
-    echo "FATAL: Cannot proceed without virtio-serial devices" >&2
-    exit 1
-fi
-
-# Execute the command with real-time output streaming
-# Use tee to both display stderr and write to virtio-serial device
-# Also save a copy for potential debugging
-(
-    echo "Executing command with virtio-serial output..." >&2
-    {exec_cmd} 2>&1 | tee /tmp/execute-output.txt > /dev/virtio-ports/execute
-    EXIT_CODE=${{PIPESTATUS[0]}}
-    
-    echo "Command completed with exit code: $EXIT_CODE" >&2
-    
-    # Write exit status as JSON to status device with retry logic
-    local status_attempts=3
-    local status_attempt=1
-    while [ $status_attempt -le $status_attempts ]; do
-        if printf '{{"exit_code": %d, "completed": true}}\n' "$EXIT_CODE" > /dev/virtio-ports/execute-status 2>/dev/null; then
-            echo "Successfully wrote exit status" >&2
-            break
-        else
-            echo "Failed to write exit status (attempt $status_attempt/$status_attempts)" >&2
-            sleep 1
-            status_attempt=$((status_attempt + 1))
-        fi
-    done
-    
-    # Exit with the same code as the original command
-    exit $EXIT_CODE
-)
-"#,
-            exec_cmd = exec_cmd.replace('"', r#"\""#) // Escape quotes in the command
-        );
-
-        // Write the wrapper script directly to the source image filesystem
-        let script_path = "/run/source-image/usr/local/bin/execute-wrapper.sh";
-        // Create the directory if it doesn't exist
-        fs::create_dir_all("/run/source-image/usr/local/bin")?;
-        fs::write(script_path, wrapper_script)?;
-
-        // Make the script executable
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(script_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(script_path, perms)?;
-
-        // Create the execute service unit that calls the wrapper script
         let service_content = format!(
             r#"[Unit]
 Description=Execute Script Service
-After= systemd-udev-settle.service
-# Wait for virtio-serial devices to be ready
-Requires=systemd-udev-settle.service
-# Give extra time for device initialization
-After=systemd-udev-settle.service
+Requires=dev-virtio\\x2dports-execute.device
 
 [Service]
 Type=oneshot
-# Add a small delay to ensure virtio-serial devices are fully initialized
-ExecStartPre=/bin/sleep 2
-# Wait for virtio-serial devices to be available with retry logic
-ExecStartPre=/bin/bash -c 'for i in {{1..30}}; do [ -e /dev/virtio-ports/execute ] && [ -e /dev/virtio-ports/execute-status ] && break || sleep 1; done'
-ExecStart=/usr/local/bin/execute-wrapper.sh
-ExecStartPost=/usr/bin/systemctl poweroff
-# Ensure we poweroff even if the command fails
-ExecStopPost=/usr/bin/systemctl poweroff
+RemainAfterExit=yes
+ExecStart={exec_cmd}
+StandardOutput=file:/dev/virtio-ports/execute
+StandardError=inherit
+"#
+        );
+        let service_finish = format!(
+            r#"[Unit]
+Description=Execute Script Service Completion
+After=bootc-execute.service
+Requires=dev-virtio\\x2dports-executestatus.device
 
-[Install]
-WantedBy=default.target
+[Service]
+Type=oneshot
+ExecStart=systemctl show bootc-execute
+ExecStart=systemctl poweroff
+StandardOutput=file:/dev/virtio-ports/executestatus
 "#
         );
 
         let service_path = "/run/systemd-units/system/bootc-execute.service";
-        debug!("Writing execute script service: {}", service_path);
-        debug!("Service content:\n{}", service_content);
         fs::write(service_path, service_content)?;
+        let service_path = "/run/systemd-units/system/bootc-execute-finish.service";
+        fs::write(service_path, service_finish)?;
 
         // Create wants directory and symlink to enable the service
         let wants_dir = "/run/systemd-units/system/default.target.wants";
         std::fs::create_dir_all(wants_dir)?;
 
-        let wants_link = "/run/systemd-units/system/default.target.wants/bootc-execute.service";
-        debug!("Creating execute service symlink: {}", wants_link);
-        std::os::unix::fs::symlink("../bootc-execute.service", wants_link)?;
+        for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
+            let wants_link = format!("/run/systemd-units/system/default.target.wants/{svc}");
+            debug!("Creating execute service symlink: {}", &wants_link);
+            std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
+        }
     }
 
     // Copy systemd units if provided (after mount units have been generated)
