@@ -3,6 +3,8 @@ use color_eyre::{eyre::eyre, Result};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::run_ephemeral::RunEphemeralOpts;
+
 #[derive(Parser)]
 pub struct ContainerEntrypointOpts {
     #[command(subcommand)]
@@ -13,9 +15,6 @@ pub struct ContainerEntrypointOpts {
 pub enum ContainerCommands {
     /// Run ephemeral VM (what run-ephemeral-impl does today)
     RunEphemeral,
-
-    /// Run VM from installed disk (disk boot mode)  
-    RunFromDisk,
 
     /// Run unified install-and-boot workflow
     RunFromInstall,
@@ -43,39 +42,8 @@ pub struct ContainerConfig {
 
 pub fn run_ephemeral_in_container() -> Result<()> {
     // Parse BCK_CONFIG from environment
-    let config_json = std::env::var("BCK_CONFIG").unwrap_or_else(|_| {
-        // Fallback to old env vars for backward compatibility
-        debug!("BCK_CONFIG not found, falling back to individual env vars");
-        let memory = std::env::var("BOOTC_MEMORY")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(2048);
-        let vcpus = std::env::var("BOOTC_VCPUS")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(2);
-        let console = std::env::var("BOOTC_CONSOLE").is_ok();
-        let extra_args = std::env::var("BOOTC_EXTRA_ARGS").ok();
-
-        let config = ContainerConfig {
-            memory_mb: memory,
-            vcpus,
-            console,
-            extra_args,
-        };
-
-        serde_json::to_string(&config).unwrap()
-    });
-
-    let config: ContainerConfig = serde_json::from_str(&config_json)?;
-
-    // Build RunEphemeralImplOpts from config
-    let opts = crate::run_ephemeral::RunEphemeralImplOpts {
-        memory: config.memory_mb,
-        vcpus: config.vcpus,
-        console: config.console,
-        extra_args: config.extra_args,
-    };
+    let config_json = std::env::var("BCK_CONFIG")?;
+    let opts: RunEphemeralOpts = serde_json::from_str(&config_json)?;
 
     // Call existing run_impl
     crate::run_ephemeral::run_impl(opts)
@@ -110,38 +78,6 @@ pub fn ssh_to_vm(opts: SshOpts) -> Result<()> {
 
     let status = cmd.status()?;
     std::process::exit(status.code().unwrap_or(1));
-}
-
-pub fn run_from_disk_in_container() -> Result<()> {
-    // Parse BCK_CONFIG from environment (same as ephemeral)
-    let config_json = std::env::var("BCK_CONFIG").unwrap_or_else(|_| {
-        // Fallback to old env vars for backward compatibility
-        debug!("BCK_CONFIG not found, falling back to individual env vars");
-        let memory = std::env::var("BOOTC_MEMORY")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(2048);
-        let vcpus = std::env::var("BOOTC_VCPUS")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(2);
-        let console = std::env::var("BOOTC_CONSOLE").is_ok();
-        let extra_args = std::env::var("BOOTC_EXTRA_ARGS").ok();
-
-        let config = ContainerConfig {
-            memory_mb: memory,
-            vcpus,
-            console,
-            extra_args,
-        };
-
-        serde_json::to_string(&config).unwrap()
-    });
-
-    let config: ContainerConfig = serde_json::from_str(&config_json)?;
-
-    // Call disk boot implementation
-    run_disk_impl(config)
 }
 
 /// Run QEMU from disk within container - variant of run_ephemeral::run_impl
@@ -511,7 +447,6 @@ pub fn run_from_install_in_container() -> Result<()> {
 pub fn run(opts: ContainerEntrypointOpts) -> Result<()> {
     match opts.command {
         ContainerCommands::RunEphemeral => run_ephemeral_in_container(),
-        ContainerCommands::RunFromDisk => run_from_disk_in_container(),
         ContainerCommands::RunFromInstall => run_from_install_in_container(),
         ContainerCommands::Ssh(ssh_opts) => ssh_to_vm(ssh_opts),
     }

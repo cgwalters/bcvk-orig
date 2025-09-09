@@ -14,13 +14,14 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use itertools::Itertools;
 use rustix::path::Arg;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{podman, utils};
 use std::process::Child;
 
 /// Common container lifecycle options for podman commands.
-#[derive(Parser, Debug, Clone, Default)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonPodmanOptions {
     #[clap(
         short = 't',
@@ -47,7 +48,7 @@ pub struct CommonPodmanOptions {
 }
 
 /// Common VM configuration options for hardware, networking, and features.
-#[derive(Parser, Debug, Clone, Default)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonVmOpts {
     #[clap(
         long,
@@ -137,7 +138,7 @@ impl CommonVmOpts {
 }
 
 /// Ephemeral VM options: container-style flags, host bind mounts, systemd injection.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize, Deserialize)]
 pub struct RunEphemeralOpts {
     #[clap(help = "Container image to run as ephemeral VM")]
     pub image: String,
@@ -207,7 +208,7 @@ pub struct RunEphemeralImplOpts {
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
 /// Returns (container_status, command_exit_code) - command exit takes precedence.
 pub fn run_qemu_in_container(
-    opts: &RunEphemeralOpts,
+    opts: RunEphemeralOpts,
     entrypoint_cmd: Option<&str>,
 ) -> Result<(std::process::ExitStatus, Option<i32>)> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
@@ -407,19 +408,8 @@ pub fn run_qemu_in_container(
     }
 
     // Pass configuration as JSON via BCK_CONFIG environment variable
-    let config = crate::container_entrypoint::ContainerConfig {
-        memory_mb: opts.common.memory_mb()?,
-        vcpus: opts.common.vcpus(),
-        console: opts.common.console,
-        extra_args: if extra_args.is_empty() {
-            None
-        } else {
-            Some(extra_args.clone())
-        },
-    };
-
-    let config_json = serde_json::to_string(&config)?;
-    cmd.args(["-e", &format!("BCK_CONFIG={}", config_json)]);
+    let config = serde_json::to_string(&opts).unwrap();
+    cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
     // Pass through BCK_RUN_FROM_INSTALL_CONFIG if it exists
     if let Ok(run_from_install_config) = std::env::var("BCK_RUN_FROM_INSTALL_CONFIG") {
@@ -430,31 +420,12 @@ pub fn run_qemu_in_container(
         debug!("Passing BCK_RUN_FROM_INSTALL_CONFIG to container");
     }
 
-    // Keep old env vars for backward compatibility (will be removed later)
-    cmd.args([
-        "-e",
-        &format!("BOOTC_MEMORY={}", opts.common.memory_mb()?),
-        "-e",
-        &format!("BOOTC_VCPUS={}", opts.common.vcpus()),
-    ]);
-
-    if !extra_args.is_empty() {
-        cmd.args(["-e", &format!("BOOTC_EXTRA_ARGS={}", extra_args)]);
-    }
-
-    if opts.common.console {
-        cmd.args(["-e", "BOOTC_CONSOLE=1"]);
-    }
-
     // Handle --execute or --execute-sh option
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
-    let execute = opts
-        .common
-        .execute_sh
-        .as_deref()
-        .map(|v| Cow::Owned(format!("/bin/sh -c '{}'", v.replace("'", "'\\''"))))
-        .or(opts.common.execute.as_deref().map(Cow::Borrowed));
-    let (execute_output_file, execute_status_file) = if let Some(execute_cmd) = execute {
+
+    let (execute_output_file, execute_status_file) = if opts.common.execute.is_some()
+        || opts.common.execute_sh.is_some()
+    {
         // Create a temp directory that will be mounted into the container
         let temp_dir = tempfile::tempdir()
             .context("Failed to create temporary directory for execute output")?;
@@ -489,9 +460,6 @@ pub fn run_qemu_in_container(
         all_serial_devices.push(format!(
             "executestatus:/run/execute-output/execute-status.txt"
         ));
-
-        cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
-        debug!("Added execute command: {}", execute_cmd);
 
         let output_path = output_file.clone();
         let status_path = status_file.clone();
@@ -691,7 +659,7 @@ pub fn run_qemu_in_container(
 /// Handles exit codes: command execution takes precedence, accepts VM exit code 1 for poweroff.target.
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     // Run QEMU inside the container with the hybrid rootfs approach
-    let (status, execute_exit_code) = run_qemu_in_container(&opts, None)?;
+    let (status, execute_exit_code) = run_qemu_in_container(opts, None)?;
 
     // If we have an execute command, prioritize its exit code over QEMU's exit code
     if let Some(exit_code) = execute_exit_code {
@@ -703,22 +671,7 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         }
     }
 
-    // QEMU may exit with non-zero status when VM powers off
-    // For testing with poweroff.target, we accept exit code 1
-    if !status.success() {
-        if let Some(code) = status.code() {
-            let kargs_str = opts.common.kernel_args.join(" ");
-            if code == 1 && kargs_str.contains("poweroff.target") {
-                debug!("QEMU exited with code 1 (expected for poweroff.target)");
-            } else {
-                return Err(eyre!("QEMU exited with non-zero status: {}", code));
-            }
-        } else {
-            return Err(eyre!("QEMU terminated by signal"));
-        }
-    }
-
-    debug!("VM terminated successfully");
+    debug!("qemu exited: {status:?}");
     Ok(())
 }
 
@@ -910,7 +863,7 @@ impl Drop for VirtiofsdCleanupGuard {
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
 /// generates systemd mount units, sets up command execution, launches QEMU.
 /// DEBUG_MODE=true drops to shell instead of QEMU.
-pub(crate) fn run_impl(opts: RunEphemeralImplOpts) -> Result<()> {
+pub(crate) fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
     use std::path::Path;
@@ -1130,10 +1083,13 @@ WantedBy=local-fs.target
         } // end else block for has_provided_units check
     }
 
-    // Handle execute command or script by creating systemd unit directly
-    let execute_cmd = std::env::var("BOOTC_EXECUTE_CMD").ok();
-
-    if let Some(exec_cmd) = execute_cmd {
+    let execute = opts
+        .common
+        .execute_sh
+        .as_deref()
+        .map(|v| Cow::Owned(format!("/bin/sh -c '{}'", v.replace("'", "'\\''"))))
+        .or(opts.common.execute.as_deref().map(Cow::Borrowed));
+    if let Some(exec_cmd) = execute.as_deref() {
         // Create systemd units directory if it doesn't exist
         if !std::path::Path::new("/run/systemd-units/system").exists() {
             fs::create_dir_all("/run/systemd-units/system")?;
@@ -1224,13 +1180,11 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             "systemd.volatile=overlay".to_string(),
         ];
 
-        if opts.console {
+        if opts.common.console {
             kernel_cmdline.push("console=ttyS0".to_string());
         }
 
-        if let Some(ref extra_args) = opts.extra_args {
-            kernel_cmdline.push(extra_args.clone());
-        }
+        kernel_cmdline.extend(opts.common.kernel_args.clone());
 
         // Parse virtio-serial-out arguments from environment variable
         let mut virtio_serial_devices = Vec::new();
@@ -1260,8 +1214,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
         // Configure and start QEMU
         let mut qemu_config = crate::qemu::QemuConfig::new_direct_boot(
-            opts.memory,
-            opts.vcpus,
+            opts.common.memory_mb()?,
+            opts.common.vcpus(),
             "/run/qemu/kernel".to_string(),
             "/run/qemu/initramfs".to_string(),
             virtiofsd_config.socket_path.clone(),
@@ -1269,21 +1223,9 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
         qemu_config
             .set_kernel_cmdline(kernel_cmdline)
-            .set_console(opts.console);
+            .set_console(opts.common.console);
 
-        // Enable SSH port forwarding if SSH credentials are present in extra args
-        let has_ssh_credentials = if let Some(ref extra_args) = opts.extra_args {
-            debug!("Checking extra_args for SSH credentials: {}", extra_args);
-            let has_creds = extra_args.contains("systemd.set_credential_binary=tmpfiles.extra:")
-                || extra_args.contains("io.systemd.credential.binary:tmpfiles.extra=");
-            debug!("SSH credentials detected: {}", has_creds);
-            has_creds
-        } else {
-            debug!("No extra_args provided");
-            false
-        };
-
-        if has_ssh_credentials {
+        if opts.common.ssh_keygen {
             qemu_config.enable_ssh_access(None); // Use default port 2222
             debug!("Enabled SSH port forwarding: host port 2222 -> guest port 22");
 
