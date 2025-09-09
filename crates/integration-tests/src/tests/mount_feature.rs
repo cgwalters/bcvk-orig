@@ -33,11 +33,11 @@ fn create_mount_verify_unit(
         r#"[Unit]
 Description=Verify mount {mount_name} and poweroff
 DefaultDependencies=no
-After=local-fs.target
-Requires=local-fs.target
+After=sysinit.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mount {mount_name}..."; for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-{mount_name}" ]; then echo "Mount point found"; break; fi; echo "Mount attempt $i/30"; sleep 1; done'
 ExecStart=/bin/bash -c 'echo "Starting mount verification for {mount_name}"; sleep 2; ls -la /run/virtiofs-mnt-{mount_name}/; if [ -f "/run/virtiofs-mnt-{mount_name}/{expected_file}" ]; then content=$(cat "/run/virtiofs-mnt-{mount_name}/{expected_file}"); if [ "$content" = "{expected_content}" ]; then echo "MOUNT_TEST_PASS: {mount_name} verified"; else echo "MOUNT_TEST_FAIL: {mount_name} wrong content: $content"; fi; else echo "MOUNT_TEST_FAIL: {mount_name} file not found at /run/virtiofs-mnt-{mount_name}/{expected_file}"; fi; systemctl poweroff'
 StandardOutput=journal+console
 StandardError=journal+console
@@ -59,11 +59,11 @@ fn create_ro_mount_verify_unit(
         r#"[Unit]
 Description=Verify read-only mount {mount_name} and poweroff
 DefaultDependencies=no
-After=local-fs.target
-Requires=local-fs.target
+After=sysinit.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mount {mount_name}..."; for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-{mount_name}" ]; then echo "Mount point found"; break; fi; echo "Mount attempt $i/30"; sleep 1; done'
 ExecStart=/bin/bash -c 'echo "Starting RO mount verification for {mount_name}"; sleep 2; ls -la /run/virtiofs-mnt-{mount_name}/; if [ -f "/run/virtiofs-mnt-{mount_name}/{expected_file}" ]; then if touch "/run/virtiofs-mnt-{mount_name}/test-write" 2>/dev/null; then echo "MOUNT_TEST_FAIL: {mount_name} is writable!"; rm "/run/virtiofs-mnt-{mount_name}/test-write"; else echo "MOUNT_TEST_PASS: {mount_name} is read-only"; fi; else echo "MOUNT_TEST_FAIL: {mount_name} not mounted"; fi; systemctl poweroff'
 StandardOutput=journal+console
 StandardError=journal+console
@@ -105,6 +105,7 @@ pub fn test_mount_feature_bind() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--console",
             "--bind",
             &format!("{}:testmount", temp_dir.path().display()),
             "--systemd-units",
@@ -167,6 +168,7 @@ pub fn test_mount_feature_ro_bind() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--console",
             "--ro-bind",
             &format!("{}:romount", temp_dir.path().display()),
             "--systemd-units",
@@ -222,11 +224,11 @@ pub fn test_mount_feature_multiple() {
         r#"[Unit]
 Description=Verify multiple mounts and poweroff
 DefaultDependencies=no
-After=local-fs.target
-Requires=local-fs.target
+After=sysinit.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mounts..."; for mount in mount1 mount2; do for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-$mount" ]; then echo "$mount mount point found"; break; fi; echo "$mount mount attempt $i/30"; sleep 1; done; done'
 ExecStart=/bin/bash -c 'echo "Verifying multiple mounts"; sleep 2; failed=0; \
 if [ -f "/run/virtiofs-mnt-mount1/file1.txt" ]; then \
   content=$(cat "/run/virtiofs-mnt-mount1/file1.txt"); \
@@ -278,6 +280,7 @@ StandardError=journal+console
             &bck,
             "run-ephemeral",
             "--rm",
+            "--console",
             "--bind",
             &format!("{}:mount1", temp_dir1.path().display()),
             "--ro-bind",

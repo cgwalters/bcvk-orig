@@ -1050,7 +1050,9 @@ pub fn wait_for_virtiofsd_socket(socket_path: &str, timeout: Duration) -> Result
 
     while start.elapsed() < timeout {
         if std::path::Path::new(socket_path).exists() {
+            // Output to both debug log and stderr for test visibility
             debug!("Virtiofsd socket ready: {}", socket_path);
+            eprintln!("Virtiofsd socket ready: {}", socket_path);
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));

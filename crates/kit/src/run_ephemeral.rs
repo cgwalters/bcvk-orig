@@ -447,44 +447,65 @@ pub fn run_qemu_in_container(
 
     // Handle --execute or --execute-sh option
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
-    let (execute_output_file, execute_status_file) =
-        if opts.common.execute.is_some() || opts.common.execute_sh.is_some() {
-            // Create a temp directory that will be mounted into the container
-            let temp_dir = tempfile::tempdir()?;
-            let output_file = temp_dir.path().join("execute-output.txt");
-            let status_file = temp_dir.path().join("execute-status.json");
+    let (execute_output_file, execute_status_file) = if opts.common.execute.is_some()
+        || opts.common.execute_sh.is_some()
+    {
+        // Create a temp directory that will be mounted into the container
+        let temp_dir = tempfile::tempdir()
+            .context("Failed to create temporary directory for execute output")?;
+        let output_file = temp_dir.path().join("execute-output.txt");
+        let status_file = temp_dir.path().join("execute-status.json");
 
-            // Create the output and status files so they exist for mounting
-            std::fs::File::create(&output_file)?;
-            std::fs::File::create(&status_file)?;
+        debug!(
+            "Created temporary directory for execute output at: {:?}",
+            temp_dir.path()
+        );
 
-            // Mount the temp directory into the container
-            cmd.args([
-                "-v",
-                &format!("{}:/run/execute-output", temp_dir.path().display()),
-            ]);
+        // Create the output and status files so they exist for mounting
+        std::fs::File::create(&output_file)
+            .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
+        std::fs::File::create(&status_file)
+            .with_context(|| format!("Failed to create status file: {}", status_file.display()))?;
 
-            // Add virtio-serial devices for execute output and status (using the mounted paths)
-            all_serial_devices.push(format!("execute:/run/execute-output/execute-output.txt"));
-            all_serial_devices.push(format!(
-                "execute-status:/run/execute-output/execute-status.json"
-            ));
+        debug!(
+            "Created execute output files: {} and {}",
+            output_file.display(),
+            status_file.display()
+        );
 
-            // Pass the execute command/script as environment variables
-            if let Some(ref execute_cmd) = opts.common.execute {
-                cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
-            } else if let Some(ref execute_sh) = opts.common.execute_sh {
-                cmd.args(["-e", &format!("BOOTC_EXECUTE_SH={}", execute_sh)]);
-            }
+        // Mount the temp directory into the container
+        cmd.args([
+            "-v",
+            &format!("{}:/run/execute-output", temp_dir.path().display()),
+        ]);
 
-            let output_path = output_file.clone();
-            let status_path = status_file.clone();
-            // Keep the temp dir alive by leaking it (we'll clean up on exit)
-            let _ = temp_dir.into_path();
-            (Some(output_path), Some(status_path))
-        } else {
-            (None, None)
-        };
+        // Add virtio-serial devices for execute output and status (using the mounted paths)
+        all_serial_devices.push(format!("execute:/run/execute-output/execute-output.txt"));
+        all_serial_devices.push(format!(
+            "execute-status:/run/execute-output/execute-status.json"
+        ));
+
+        // Pass the execute command/script as environment variables
+        if let Some(ref execute_cmd) = opts.common.execute {
+            cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
+            debug!("Added execute command: {}", execute_cmd);
+        } else if let Some(ref execute_sh) = opts.common.execute_sh {
+            cmd.args(["-e", &format!("BOOTC_EXECUTE_SH={}", execute_sh)]);
+            debug!("Added execute shell script: {}", execute_sh);
+        }
+
+        let output_path = output_file.clone();
+        let status_path = status_file.clone();
+        // Keep the temp dir alive by leaking it (we'll clean up on exit)
+        let temp_path = temp_dir.into_path();
+        debug!(
+            "Temp directory will be preserved at: {}",
+            temp_path.display()
+        );
+        (Some(output_path), Some(status_path))
+    } else {
+        (None, None)
+    };
 
     // Pass virtio-serial devices as environment variable
     if !all_serial_devices.is_empty() {
@@ -537,13 +558,24 @@ pub fn run_qemu_in_container(
         let output_thread = thread::spawn(move || {
             let mut file_position = 0u64;
             let mut last_size = 0u64;
+            let mut creation_timeout = 0;
+            const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
 
-            // Wait for the file to be created
+            // Wait for the file to be created with better timeout handling
             while !output_file_clone.exists() && !finished_clone.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(100));
+                creation_timeout += 1;
+                if creation_timeout >= MAX_CREATION_TIMEOUT {
+                    debug!(
+                        "Output file creation timeout after {}ms",
+                        MAX_CREATION_TIMEOUT * 100
+                    );
+                    return;
+                }
             }
 
             if !output_file_clone.exists() {
+                debug!("Process finished before output file was created");
                 return; // Exit early if process finished before file was created
             }
 
@@ -554,15 +586,28 @@ pub fn run_qemu_in_container(
                     let current_size = metadata.len();
                     if current_size > last_size {
                         if let Ok(mut file) = File::open(&output_file_clone) {
-                            let _ = file.seek(SeekFrom::Start(file_position));
-                            let reader = BufReader::new(file);
-
-                            for line in reader.lines() {
-                                if let Ok(line) = line {
-                                    println!("{}", line);
-                                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                                    file_position += line.len() as u64 + 1; // +1 for newline
+                            if let Ok(new_position) = file.seek(SeekFrom::Start(file_position)) {
+                                if new_position != file_position {
+                                    debug!(
+                                        "File seek position mismatch: expected {}, got {}",
+                                        file_position, new_position
+                                    );
                                 }
+
+                                let reader = BufReader::new(file);
+                                let mut bytes_read = 0u64;
+
+                                for line in reader.lines() {
+                                    if let Ok(line) = line {
+                                        println!("{}", line);
+                                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                                        // More accurate byte counting: line length + newline character
+                                        bytes_read += line.as_bytes().len() as u64 + 1;
+                                    }
+                                }
+
+                                // Update position based on actual bytes read
+                                file_position += bytes_read;
                             }
                             last_size = current_size;
                         }
@@ -571,15 +616,20 @@ pub fn run_qemu_in_container(
 
                 // Check if we should exit
                 if finished_clone.load(Ordering::Relaxed) {
-                    // Process finished, read any remaining output
+                    // Process finished, read any remaining output with improved handling
+                    debug!(
+                        "Process finished, reading final output from position {}",
+                        file_position
+                    );
                     if let Ok(mut file) = File::open(&output_file_clone) {
-                        let _ = file.seek(SeekFrom::Start(file_position));
-                        let reader = BufReader::new(file);
+                        if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
+                            let reader = BufReader::new(file);
 
-                        for line in reader.lines() {
-                            if let Ok(line) = line {
-                                println!("{}", line);
-                                std::io::Write::flush(&mut std::io::stdout()).ok();
+                            for line in reader.lines() {
+                                if let Ok(line) = line {
+                                    println!("{}", line);
+                                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                                }
                             }
                         }
                     }
@@ -1122,11 +1172,21 @@ WantedBy=local-fs.target
                     format!("Failed to write mount unit to {}", mount_unit_path)
                 })?;
 
+                // Enable the mount unit by creating symlink in local-fs.target.wants/
+                let wants_dir = format!("{}/local-fs.target.wants", service_dir);
+                fs::create_dir_all(&wants_dir).ok();
+                let wants_link = format!("{}/{}", wants_dir, mount_unit_name);
+                let relative_target = format!("../{}", mount_unit_name);
+                std::os::unix::fs::symlink(&relative_target, &wants_link).ok();
+
                 // Create mount point directory in the image
                 let image_mount_point = format!("/run/source-image{}", mount_point);
                 fs::create_dir_all(&image_mount_point).ok();
 
-                debug!("Generated mount unit: {}", mount_unit_name);
+                debug!(
+                    "Generated mount unit: {} (enabled in local-fs.target)",
+                    mount_unit_name
+                );
             }
         } // end else block for has_provided_units check
     }
@@ -1151,17 +1211,58 @@ WantedBy=local-fs.target
 set +e  # Don't exit on command failure
 echo "Starting execute command: {exec_cmd}" >&2
 
+# Function to wait for virtio-serial devices with retry logic
+wait_for_virtio_devices() {{
+    echo "Waiting for virtio-serial devices..." >&2
+    local max_attempts=30
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        if [ -e /dev/virtio-ports/execute ] && [ -e /dev/virtio-ports/execute-status ]; then
+            echo "Virtio-serial devices are ready" >&2
+            return 0
+        fi
+        
+        echo "Attempt $attempt/$max_attempts: Waiting for virtio-serial devices..." >&2
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    
+    echo "ERROR: Virtio-serial devices not available after $max_attempts attempts" >&2
+    echo "Available devices:" >&2
+    ls -la /dev/virtio-ports/ 2>&1 || echo "No virtio-ports directory found" >&2
+    return 1
+}}
+
+# Wait for devices before proceeding
+if ! wait_for_virtio_devices; then
+    echo "FATAL: Cannot proceed without virtio-serial devices" >&2
+    exit 1
+fi
+
 # Execute the command with real-time output streaming
 # Use tee to both display stderr and write to virtio-serial device
 # Also save a copy for potential debugging
 (
+    echo "Executing command with virtio-serial output..." >&2
     {exec_cmd} 2>&1 | tee /tmp/execute-output.txt > /dev/virtio-ports/execute
     EXIT_CODE=${{PIPESTATUS[0]}}
     
     echo "Command completed with exit code: $EXIT_CODE" >&2
     
-    # Write exit status as JSON to status device
-    printf '{{"exit_code": %d, "completed": true}}\n' "$EXIT_CODE" > /dev/virtio-ports/execute-status 2>/dev/null || true
+    # Write exit status as JSON to status device with retry logic
+    local status_attempts=3
+    local status_attempt=1
+    while [ $status_attempt -le $status_attempts ]; do
+        if printf '{{"exit_code": %d, "completed": true}}\n' "$EXIT_CODE" > /dev/virtio-ports/execute-status 2>/dev/null; then
+            echo "Successfully wrote exit status" >&2
+            break
+        else
+            echo "Failed to write exit status (attempt $status_attempt/$status_attempts)" >&2
+            sleep 1
+            status_attempt=$((status_attempt + 1))
+        fi
+    done
     
     # Exit with the same code as the original command
     exit $EXIT_CODE
@@ -1186,13 +1287,18 @@ echo "Starting execute command: {exec_cmd}" >&2
         let service_content = format!(
             r#"[Unit]
 Description=Execute Script Service
-After=multi-user.target
-# TODO: Use proper device dependencies once virtio-serial device naming is resolved
-# Requires=dev-virtio\x2dports-execute.device
-# After=dev-virtio\x2dports-execute.device
+After=multi-user.target systemd-udev-settle.service
+# Wait for virtio-serial devices to be ready
+Requires=systemd-udev-settle.service
+# Give extra time for device initialization
+After=systemd-udev-settle.service
 
 [Service]
 Type=oneshot
+# Add a small delay to ensure virtio-serial devices are fully initialized
+ExecStartPre=/bin/sleep 2
+# Wait for virtio-serial devices to be available with retry logic
+ExecStartPre=/bin/bash -c 'for i in {{1..30}}; do [ -e /dev/virtio-ports/execute ] && [ -e /dev/virtio-ports/execute-status ] && break || sleep 1; done'
 ExecStart=/usr/local/bin/execute-wrapper.sh
 ExecStartPost=/usr/bin/systemctl poweroff
 # Ensure we poweroff even if the command fails

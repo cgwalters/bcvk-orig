@@ -90,10 +90,10 @@ use tracing::debug;
 /// See the module-level documentation for details on the installation architecture and workflow.
 #[derive(Debug, Parser)]
 pub struct RunInstallOpts {
-    /// Container image reference to install
+    /// Container image to install
     pub source_image: String,
 
-    /// Path to the target disk image file
+    /// Target disk/device path
     pub target_disk: PathBuf,
 
     /// Root filesystem type (ext4, xfs, btrfs)
@@ -161,8 +161,17 @@ impl RunInstallOpts {
                 return Err(eyre!("Target disk must be a regular file, got: {:?}", path));
             }
         } else {
-            // Create parent directory if needed
+            // Validate parent directory exists or can be created
             if let Some(parent) = path.parent() {
+                if !parent.exists() {
+                    // Check if we can create the parent directory by attempting to create it
+                    // but first check if parent's parent exists
+                    if let Some(grandparent) = parent.parent() {
+                        if !grandparent.exists() {
+                            return Err(eyre!("Parent directory does not exist: {:?}", parent));
+                        }
+                    }
+                }
                 std::fs::create_dir_all(parent)?;
             }
         }
@@ -236,6 +245,9 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
     // Resolve container storage path (auto-detect or validate specified path)
     let storage_path = opts.get_storage_path()?;
 
+    // Always output container storage path for test visibility
+    eprintln!("Using container storage at: {:?}", storage_path);
+
     // Debug logging for installation configuration
     if opts.common.debug {
         debug!("Using container storage at: {:?}", storage_path);
@@ -258,6 +270,13 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
         // Create sparse file - only allocates space as data is written
         let file = std::fs::File::create(&opts.target_disk)?;
         file.set_len(disk_size)?;
+
+        if opts.common.debug {
+            println!(
+                "Created target disk file: {:?} (size: {} bytes)",
+                opts.target_disk, disk_size
+            );
+        }
     }
 
     // Phase 3: Installation command generation

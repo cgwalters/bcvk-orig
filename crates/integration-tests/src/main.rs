@@ -99,6 +99,10 @@ fn main() {
             tests::run_ephemeral::test_run_ephemeral_execute();
             Ok(())
         }),
+        Trial::test("run_ephemeral_execute_stress", || {
+            tests::run_ephemeral::test_run_ephemeral_execute_stress();
+            Ok(())
+        }),
         Trial::test("run_ephemeral_ssh_key_generation", || {
             tests::run_ephemeral::test_run_ephemeral_ssh_key_generation();
             Ok(())

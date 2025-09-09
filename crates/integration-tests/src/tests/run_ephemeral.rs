@@ -218,6 +218,61 @@ pub fn test_run_ephemeral_execute() {
     eprintln!("Execute test passed: script output captured successfully");
 }
 
+pub fn test_run_ephemeral_execute_stress() {
+    let bck = get_bck_command().unwrap();
+
+    // Run with a very quick script to stress test race conditions
+    let script = "echo 'Quick output'; echo 'Done'";
+
+    for i in 1..=5 {
+        eprintln!("Running stress test iteration {}/5", i);
+
+        let output = Command::new("timeout")
+            .args([
+                "120s",
+                &bck,
+                "run-ephemeral",
+                "--rm",
+                "--execute-sh",
+                script,
+                "quay.io/fedora/fedora-bootc:42",
+            ])
+            .output()
+            .expect("Failed to run bootc-kit run-ephemeral with --execute-sh");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        eprintln!("Iteration {} stdout: {}", i, stdout);
+        eprintln!("Iteration {} stderr: {}", i, stderr);
+
+        // Check that the command completed successfully
+        assert!(
+            output.status.success(),
+            "Iteration {} failed: {}",
+            i,
+            stderr
+        );
+
+        // Verify that our script output appears in stdout
+        assert!(
+            stdout.contains("Quick output"),
+            "Iteration {}: Script output 'Quick output' not found in stdout: {}",
+            i,
+            stdout
+        );
+
+        assert!(
+            stdout.contains("Done"),
+            "Iteration {}: Script completion message 'Done' not found in stdout: {}",
+            i,
+            stdout
+        );
+    }
+
+    eprintln!("Stress test passed: all iterations successful");
+}
+
 pub fn test_run_ephemeral_ssh_key_generation() {
     const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
     let bck = get_bck_command().unwrap();
