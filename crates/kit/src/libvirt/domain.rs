@@ -3,6 +3,7 @@
 //! This module provides utilities for generating libvirt domain XML configurations
 //! for bootc containers, inspired by the podman-bootc domain builder pattern.
 
+use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_MB};
 use color_eyre::{eyre::eyre, Result};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -94,8 +95,8 @@ impl DomainBuilder {
     /// Build the domain XML
     pub fn build_xml(self) -> Result<String> {
         let name = self.name.ok_or_else(|| eyre!("Domain name is required"))?;
-        let memory = self.memory.unwrap_or(2048); // Default 2GB
-        let vcpus = self.vcpus.unwrap_or(2);
+        let memory = self.memory.unwrap_or(DEFAULT_MEMORY_MB as u64);
+        let vcpus = self.vcpus.unwrap_or_else(default_vcpus);
         let uuid = self.uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
 
         let mut xml = format!(

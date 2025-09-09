@@ -8,6 +8,7 @@ use crate::images;
 use crate::install_options::InstallOptions;
 use crate::libvirt::domain::DomainBuilder;
 use crate::libvirt::upload::LibvirtUploadOpts;
+use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR, DEFAULT_MEMORY_USER_STR};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::process::Command;
@@ -29,11 +30,11 @@ pub struct LibvirtCreateOpts {
     pub domain_name: Option<String>,
 
     /// Memory size for the domain (e.g. 2G, 1024M)
-    #[clap(long, default_value = "2G")]
+    #[clap(long, default_value = DEFAULT_MEMORY_USER_STR)]
     pub memory: String,
 
     /// Number of vCPUs for the domain
-    #[clap(long, default_value = "2")]
+    #[clap(long, default_value_t = default_vcpus())]
     pub vcpus: u32,
 
     /// Network configuration (default, bridge=name, none)
@@ -77,11 +78,11 @@ pub struct LibvirtCreateOpts {
     pub disk_size: Option<String>,
 
     /// Memory size for installation VM during auto-upload (e.g. 2G, 1024M)
-    #[clap(long, default_value = "2048")]
+    #[clap(long, default_value = DEFAULT_MEMORY_STR)]
     pub install_memory: String,
 
     /// Number of vCPUs for installation VM during auto-upload
-    #[clap(long, default_value = "2")]
+    #[clap(long, default_value_t = default_vcpus())]
     pub install_vcpus: u32,
 }
 
@@ -141,8 +142,8 @@ impl LibvirtCreateOpts {
             pool: self.pool.clone(),
             disk_size: None,
             install: self.install.clone(),
-            memory: "2048".to_string(),
-            vcpus: 2,
+            memory: DEFAULT_MEMORY_STR.to_string(),
+            vcpus: default_vcpus(),
             karg: vec![],
             connect: self.connect.clone(),
             skip_upload: true,

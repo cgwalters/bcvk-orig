@@ -4,6 +4,7 @@
 //! to libvirt storage pools, maintaining container image metadata as libvirt annotations.
 
 use crate::install_options::InstallOptions;
+use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR};
 use crate::run_install::{run as run_install, RunInstallOpts};
 use crate::{images, utils};
 use clap::Parser;
@@ -35,11 +36,11 @@ pub struct LibvirtUploadDiskOpts {
     pub install: InstallOptions,
 
     /// Memory size for installation VM (e.g. 2G, 1024M)
-    #[clap(long, default_value = "2048")]
+    #[clap(long, default_value = DEFAULT_MEMORY_STR)]
     pub memory: String,
 
     /// Number of vCPUs for installation VM
-    #[clap(long, default_value = "2")]
+    #[clap(long, default_value_t = default_vcpus())]
     pub vcpus: u32,
 
     /// Additional kernel arguments for installation
@@ -267,7 +268,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
         disk_size: Some(disk_size),
         common: crate::run_ephemeral::CommonVmOpts {
             memory: Some(opts.memory.clone()),
-            vcpus: Some(opts.vcpus),
+            vcpus: opts.vcpus,
             kernel_args: opts.karg.clone(),
             net: Some("none".to_string()),
             console: false,

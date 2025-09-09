@@ -3,7 +3,7 @@ use color_eyre::{eyre::eyre, Result};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::run_ephemeral::RunEphemeralOpts;
+use crate::run_ephemeral::{default_vcpus, RunEphemeralOpts, DEFAULT_MEMORY_MB};
 
 #[derive(Parser)]
 pub struct ContainerEntrypointOpts {
@@ -280,7 +280,11 @@ pub fn run_from_install_in_container() -> Result<()> {
     let config_json = std::env::var("BCK_RUN_FROM_INSTALL_CONFIG").unwrap_or_else(|_| {
         debug!("BCK_RUN_FROM_INSTALL_CONFIG not found, falling back to BCK_CONFIG");
         std::env::var("BCK_CONFIG").unwrap_or_else(|_| {
-            r#"{"memory_mb": 2048, "vcpus": 2, "console": false, "extra_args": null}"#.to_string()
+            format!(
+                r#"{{"memory_mb": {}, "vcpus": {}, "console": false, "extra_args": null}}"#,
+                DEFAULT_MEMORY_MB,
+                default_vcpus()
+            )
         })
     });
 
@@ -333,7 +337,7 @@ pub fn run_from_install_in_container() -> Result<()> {
         disk_size: None,
         common: crate::run_ephemeral::CommonVmOpts {
             memory: None,
-            vcpus: None,
+            vcpus: default_vcpus(),
             kernel_args: Vec::new(), // No SSH kernel args needed for installation
             net: None,
             console: false,
@@ -417,8 +421,11 @@ pub fn run_from_install_in_container() -> Result<()> {
         memory_mb: config
             .get("memory_mb")
             .and_then(|m| m.as_u64())
-            .unwrap_or(2048) as u32,
-        vcpus: config.get("vcpus").and_then(|v| v.as_u64()).unwrap_or(2) as u32,
+            .unwrap_or(DEFAULT_MEMORY_MB as u64) as u32,
+        vcpus: config
+            .get("vcpus")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| default_vcpus() as u64) as u32,
         console: config
             .get("console")
             .and_then(|c| c.as_bool())

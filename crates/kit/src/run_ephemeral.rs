@@ -16,6 +16,22 @@ use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+/// Default memory size in MB
+pub const DEFAULT_MEMORY_MB: u32 = 2048;
+
+/// Default memory size as string for clap defaults (in MB)
+pub const DEFAULT_MEMORY_STR: &str = "2048";
+
+/// Default memory size as string for user-facing defaults (in GB)
+pub const DEFAULT_MEMORY_USER_STR: &str = "2G";
+
+/// Get default vCPU count (number of available processors, or 2 as fallback)
+pub fn default_vcpus() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(2)
+}
+
 use crate::{podman, utils};
 use std::process::Child;
 
@@ -51,12 +67,13 @@ pub struct CommonPodmanOptions {
 pub struct CommonVmOpts {
     #[clap(
         long,
-        help = "Memory size (e.g. 2G, 1024M, 512m, or plain number for MB) [default: 2048]"
+        default_value = DEFAULT_MEMORY_STR,
+        help = "Memory size (e.g. 2G, 1024M, 512m, or plain number for MB)"
     )]
     pub memory: Option<String>,
 
-    #[clap(long, help = "Number of vCPUs [default: 2]")]
-    pub vcpus: Option<u32>,
+    #[clap(long, default_value_t = default_vcpus(), help = "Number of vCPUs")]
+    pub vcpus: u32,
 
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
@@ -108,18 +125,18 @@ pub struct CommonVmOpts {
 }
 
 impl CommonVmOpts {
-    /// Parse memory specification to MB (default: 2048)
+    /// Parse memory specification to MB
     pub fn memory_mb(&self) -> color_eyre::Result<u32> {
         if let Some(ref mem_str) = self.memory {
             crate::utils::parse_memory_to_mb(mem_str)
         } else {
-            Ok(2048)
+            Ok(DEFAULT_MEMORY_MB)
         }
     }
 
-    /// Get vCPU count (default: 2)
+    /// Get vCPU count
     pub fn vcpus(&self) -> u32 {
-        self.vcpus.unwrap_or(2)
+        self.vcpus
     }
 
     /// Get network config (default: "none")
