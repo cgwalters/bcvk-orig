@@ -63,7 +63,7 @@ The tests demonstrate the intended bootc installation workflow:
 bootc-kit run-ephemeral \
   --mount-disk-file /path/to/disk.img:output \
   --bind-storage-ro \
-  --execute-sh "bootc install to-disk --source-imgref <image> /dev/disk/by-id/virtio-output" \
+  --execute "bootc install to-disk --source-imgref <image> /dev/disk/by-id/virtio-output" \
   <image>
 ```
 

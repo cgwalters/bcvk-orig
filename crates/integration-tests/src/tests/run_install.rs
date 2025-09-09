@@ -88,7 +88,7 @@ echo 'Storage test complete'
             "run-ephemeral",
             "--bind-storage-ro",
             "--rm",
-            "--execute-sh",
+            "--execute",
             script,
             "quay.io/fedora/fedora-bootc:42",
         ])

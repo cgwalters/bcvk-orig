@@ -158,10 +158,10 @@ impl RunInstallOpts {
     }
 
     /// Generate the complete bootc installation command
-    fn generate_bootc_install_command(&self) -> String {
+    fn generate_bootc_install_command(&self) -> Vec<String> {
         let source_imgref = format!("containers-storage:{}", self.source_image);
 
-        [
+        let bootc_install = [
             "env",
             // This is the magic trick to pull the storage from the host
             "STORAGE_OPTS=additionalimagestore=/run/virtiofs-mnt-hoststorage/",
@@ -185,7 +185,12 @@ impl RunInstallOpts {
             }
             acc.push_str(&*elt);
             acc
-        })
+        });
+        // TODO: make /var a tmpfs by default (actually make run-ephemeral more like a readonly bootc)
+        vec![
+            "mount -t tmpfs tmpfs /var/lib/containers".to_owned(),
+            bootc_install,
+        ]
     }
 
     /// Calculate the optimal target disk size based on the source image or explicit size
@@ -284,7 +289,7 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
     // Phase 5: Final VM configuration and execution
     let mut final_opts = ephemeral_opts;
     // Set the installation script to execute in the VM
-    final_opts.common.execute = Some(bootc_install_command);
+    final_opts.common.execute = bootc_install_command;
 
     // Ensure clean shutdown after installation completes
     final_opts

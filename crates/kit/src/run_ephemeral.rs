@@ -4,7 +4,6 @@
 //! host /usr bind-mount, and virtiofs for container image filesystem.
 //! Supports SSH access, command execution, and host directory mounts.
 
-use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::Command;
@@ -86,17 +85,9 @@ pub struct CommonVmOpts {
 
     #[clap(
         long,
-        conflicts_with = "execute_sh",
         help = "Execute command inside VM via systemd and capture output"
     )]
-    pub execute: Option<String>,
-
-    #[clap(
-        long,
-        conflicts_with = "execute",
-        help = "Execute shell script inside VM and capture output"
-    )]
-    pub execute_sh: Option<String>,
+    pub execute: Vec<String>,
 
     #[clap(long, short = 'K', help = "Generate SSH keypair and enable SSH access")]
     pub ssh_keygen: bool,
@@ -187,22 +178,6 @@ pub struct RunEphemeralOpts {
         help = "Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>"
     )]
     pub mount_disk_files: Vec<String>,
-}
-
-/// Internal VM options used by container entrypoint (not for direct use).
-#[derive(Parser, Debug)]
-pub struct RunEphemeralImplOpts {
-    #[clap(long, help = "Memory in MiB (processed from user input)")]
-    pub memory: u32,
-
-    #[clap(long, help = "Number of vCPUs (processed from user input)")]
-    pub vcpus: u32,
-
-    #[clap(long, help = "Complete kernel command line arguments")]
-    pub extra_args: Option<String>,
-
-    #[clap(long, help = "Enable console output to terminal")]
-    pub console: bool,
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
@@ -420,12 +395,9 @@ pub fn run_qemu_in_container(
         debug!("Passing BCK_RUN_FROM_INSTALL_CONFIG to container");
     }
 
-    // Handle --execute or --execute-sh option
+    // Handle --execute
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
-
-    let (execute_output_file, execute_status_file) = if opts.common.execute.is_some()
-        || opts.common.execute_sh.is_some()
-    {
+    let (execute_output_file, execute_status_file) = if !opts.common.execute.is_empty() {
         // Create a temp directory that will be mounted into the container
         let temp_dir = tempfile::tempdir()
             .context("Failed to create temporary directory for execute output")?;
@@ -1083,34 +1055,33 @@ WantedBy=local-fs.target
         } // end else block for has_provided_units check
     }
 
-    let execute = opts
-        .common
-        .execute_sh
-        .as_deref()
-        .map(|v| Cow::Owned(format!("/bin/sh -c '{}'", v.replace("'", "'\\''"))))
-        .or(opts.common.execute.as_deref().map(Cow::Borrowed));
-    if let Some(exec_cmd) = execute.as_deref() {
-        // Create systemd units directory if it doesn't exist
-        if !std::path::Path::new("/run/systemd-units/system").exists() {
-            fs::create_dir_all("/run/systemd-units/system")?;
-            fs::create_dir_all("/run/systemd-units/system/default.target.wants")?;
-        }
+    match opts.common.execute.as_slice() {
+        [] => {}
+        elts => {
+            // Create systemd units directory if it doesn't exist
+            if !std::path::Path::new("/run/systemd-units/system").exists() {
+                fs::create_dir_all("/run/systemd-units/system")?;
+                fs::create_dir_all("/run/systemd-units/system/default.target.wants")?;
+            }
 
-        let service_content = format!(
-            r#"[Unit]
+            let mut service_content = format!(
+                r#"[Unit]
 Description=Execute Script Service
 Requires=dev-virtio\\x2dports-execute.device
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart={exec_cmd}
 StandardOutput=file:/dev/virtio-ports/execute
 StandardError=inherit
 "#
-        );
-        let service_finish = format!(
-            r#"[Unit]
+            );
+            for elt in elts {
+                service_content.push_str(&format!("ExecStart={elt}\n"));
+            }
+
+            let service_finish = format!(
+                r#"[Unit]
 Description=Execute Script Service Completion
 After=bootc-execute.service
 Requires=dev-virtio\\x2dports-executestatus.device
@@ -1121,21 +1092,22 @@ ExecStart=systemctl show bootc-execute
 ExecStart=systemctl poweroff
 StandardOutput=file:/dev/virtio-ports/executestatus
 "#
-        );
+            );
 
-        let service_path = "/run/systemd-units/system/bootc-execute.service";
-        fs::write(service_path, service_content)?;
-        let service_path = "/run/systemd-units/system/bootc-execute-finish.service";
-        fs::write(service_path, service_finish)?;
+            let service_path = "/run/systemd-units/system/bootc-execute.service";
+            fs::write(service_path, service_content)?;
+            let service_path = "/run/systemd-units/system/bootc-execute-finish.service";
+            fs::write(service_path, service_finish)?;
 
-        // Create wants directory and symlink to enable the service
-        let wants_dir = "/run/systemd-units/system/default.target.wants";
-        std::fs::create_dir_all(wants_dir)?;
+            // Create wants directory and symlink to enable the service
+            let wants_dir = "/run/systemd-units/system/default.target.wants";
+            std::fs::create_dir_all(wants_dir)?;
 
-        for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
-            let wants_link = format!("/run/systemd-units/system/default.target.wants/{svc}");
-            debug!("Creating execute service symlink: {}", &wants_link);
-            std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
+            for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
+                let wants_link = format!("/run/systemd-units/system/default.target.wants/{svc}");
+                debug!("Creating execute service symlink: {}", &wants_link);
+                std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
+            }
         }
     }
 
