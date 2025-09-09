@@ -43,7 +43,6 @@
 //!
 //! - **Filesystem Types**: ext4 (default), xfs, and btrfs filesystems
 //! - **Custom Root Size**: Optional specification of root filesystem size
-//! - **Loopback Installation**: Support for `--via-loopback` for specialized setups
 //! - **Storage Path Detection**: Automatic detection of host container storage or
 //!   manual specification for custom setups
 //!
@@ -72,12 +71,9 @@
 //! # Custom filesystem and size
 //! bootc-kit run-install --filesystem xfs --root-size 20G \
 //!     quay.io/centos-bootc/centos-bootc:stream10 output.img
-//!
-//! # Installation with loopback mode
-//! bootc-kit run-install --via-loopback \
-//!     registry.fedoraproject.org/fedora-bootc:42 fedora-disk.img
 //! ```
 
+use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run as run_ephemeral, CommonVmOpts, RunEphemeralOpts};
 use crate::{images, utils};
 use clap::Parser;
@@ -96,28 +92,13 @@ pub struct RunInstallOpts {
     /// Target disk/device path
     pub target_disk: PathBuf,
 
-    /// Root filesystem type (ext4, xfs, btrfs)
-    #[clap(
-        long,
-        default_value = "ext4",
-        help = "Root filesystem type (ext4, xfs, btrfs)"
-    )]
-    pub filesystem: String,
+    /// Installation options (filesystem, root-size, storage-path)
+    #[clap(flatten)]
+    pub install: InstallOptions,
 
-    /// Custom root filesystem size (e.g., '10G', '5120M')
-    #[clap(long, help = "Root filesystem size (e.g., '10G', '5120M')")]
-    pub root_size: Option<String>,
-
-    /// Use loopback device for installation (--via-loopback)
-    #[clap(long, help = "Use loopback device for installation (--via-loopback)")]
-    pub via_loopback: bool,
-
-    /// Path to host container storage (auto-detected if not specified)
-    #[clap(
-        long,
-        help = "Path to host container storage (auto-detected if not specified)"
-    )]
-    pub storage_path: Option<PathBuf>,
+    /// Disk size to create (optional, defaults to calculated size based on source image)
+    #[clap(long)]
+    pub disk_size: Option<u64>,
 
     /// Common VM configuration options
     #[clap(flatten)]
@@ -140,7 +121,7 @@ impl RunInstallOpts {
     ///
     /// Uses explicit storage_path if specified, otherwise auto-detects container storage.
     fn get_storage_path(&self) -> Result<PathBuf> {
-        if let Some(ref path) = self.storage_path {
+        if let Some(ref path) = self.install.storage_path {
             utils::validate_container_storage_path(path)?;
             Ok(path.clone())
         } else {
@@ -154,12 +135,12 @@ impl RunInstallOpts {
     fn prepare_target_disk(&self) -> Result<()> {
         let path = &self.target_disk;
 
-        // Only support regular files for disk images
+        // Error out if target disk already exists
         if path.exists() {
-            let metadata = std::fs::metadata(path)?;
-            if !metadata.is_file() {
-                return Err(eyre!("Target disk must be a regular file, got: {:?}", path));
-            }
+            return Err(eyre!(
+                "Target disk already exists: {:?}. Remove it first or use a different path.",
+                path
+            ));
         } else {
             // Validate parent directory exists or can be created
             if let Some(parent) = path.parent() {
@@ -197,17 +178,8 @@ impl RunInstallOpts {
             source_imgref,
         ];
 
-        if self.via_loopback {
-            bootc_cmd.push("--via-loopback".to_string());
-        }
-
-        if let Some(ref root_size) = self.root_size {
-            bootc_cmd.push("--root-size".to_string());
-            bootc_cmd.push(root_size.clone());
-        }
-
-        bootc_cmd.push("--filesystem".to_string());
-        bootc_cmd.push(self.filesystem.clone());
+        // Add install options
+        bootc_cmd.extend(self.install.to_bootc_args());
 
         // Target device in VM (mounted via virtio-blk)
         bootc_cmd.push("/dev/disk/by-id/virtio-output".to_string());
@@ -220,10 +192,14 @@ impl RunInstallOpts {
         )
     }
 
-    /// Calculate the optimal target disk size based on the source image
+    /// Calculate the optimal target disk size based on the source image or explicit size
     ///
-    /// Returns 2x the image size with a 4GB minimum. See module docs for disk sizing details.
+    /// Returns explicit disk_size if provided, otherwise 2x the image size with a 4GB minimum.
     fn calculate_disk_size(&self) -> Result<u64> {
+        if let Some(size) = self.disk_size {
+            return Ok(size);
+        }
+
         // Get the image size and multiply by 2 for installation space
         let image_size =
             images::get_image_size(&self.source_image).unwrap_or(2 * 1024 * 1024 * 1024); // Default to 2GB if we can't get image size
@@ -252,8 +228,8 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
     if opts.common.debug {
         debug!("Using container storage at: {:?}", storage_path);
         debug!("Installing to target disk: {:?}", opts.target_disk);
-        debug!("Filesystem: {}", opts.filesystem);
-        if let Some(ref root_size) = opts.root_size {
+        debug!("Filesystem: {:?}", opts.install.filesystem);
+        if let Some(ref root_size) = opts.install.root_size {
             debug!("Root size: {}", root_size);
         }
     }
@@ -348,14 +324,20 @@ mod tests {
 
     #[test]
     fn test_prepare_target_disk_file() -> Result<()> {
-        let temp_file = NamedTempFile::new()?;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new()?;
+        let target_disk = temp_dir.path().join("test-disk.img");
+
         let opts = RunInstallOpts {
             source_image: "test:latest".to_string(),
-            target_disk: temp_file.path().to_path_buf(),
-            filesystem: "ext4".to_string(),
-            root_size: None,
-            via_loopback: false,
-            storage_path: None,
+            target_disk,
+            install: InstallOptions {
+                filesystem: Some("ext4".to_string()),
+                root_size: None,
+                storage_path: None,
+            },
+            disk_size: None,
             common: CommonVmOpts::default(),
             test_mode: false,
         };
@@ -369,10 +351,12 @@ mod tests {
         let opts = RunInstallOpts {
             source_image: "localhost/test:latest".to_string(),
             target_disk: "/tmp/test.img".into(),
-            filesystem: "xfs".to_string(),
-            root_size: Some("10G".to_string()),
-            via_loopback: true,
-            storage_path: None,
+            install: InstallOptions {
+                filesystem: Some("xfs".to_string()),
+                root_size: Some("10G".to_string()),
+                storage_path: None,
+            },
+            disk_size: None,
             common: CommonVmOpts::default(),
             test_mode: false,
         };
@@ -380,7 +364,6 @@ mod tests {
         let cmd = opts.generate_bootc_install_command();
         assert!(cmd.contains("bootc install to-disk"));
         assert!(cmd.contains("--source-imgref containers-storage:localhost/test:latest"));
-        assert!(cmd.contains("--via-loopback"));
         assert!(cmd.contains("--root-size 10G"));
         assert!(cmd.contains("--filesystem xfs"));
         assert!(cmd.contains("/dev/disk/by-id/virtio-output"));
@@ -392,10 +375,12 @@ mod tests {
         let opts = RunInstallOpts {
             source_image: "test:latest".to_string(),
             target_disk: "/tmp/test.img".into(),
-            filesystem: "ext4".to_string(),
-            root_size: None,
-            via_loopback: false,
-            storage_path: None,
+            install: InstallOptions {
+                filesystem: Some("ext4".to_string()),
+                root_size: None,
+                storage_path: None,
+            },
+            disk_size: None,
             common: CommonVmOpts::default(),
             test_mode: false,
         };

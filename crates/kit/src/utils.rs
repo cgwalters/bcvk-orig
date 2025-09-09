@@ -104,6 +104,37 @@ pub(crate) fn validate_container_storage_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Parse size string (e.g., "10G", "5120M", "1T") to bytes
+pub(crate) fn parse_size(size_str: &str) -> Result<u64> {
+    let size_str = size_str.trim().to_uppercase();
+
+    if size_str.is_empty() {
+        return Err(eyre!("Empty size string"));
+    }
+
+    let (number_part, unit_part) = if let Some(pos) = size_str.rfind(|c: char| c.is_ascii_digit()) {
+        let (num, unit) = size_str.split_at(pos + 1);
+        (num, unit)
+    } else {
+        return Err(eyre!("Invalid size format: {}", size_str));
+    };
+
+    let number: u64 = number_part
+        .parse()
+        .map_err(|_| eyre!("Invalid number in size: {}", number_part))?;
+
+    let multiplier = match unit_part {
+        "" | "B" => 1,
+        "K" | "KB" => 1024,
+        "M" | "MB" => 1024 * 1024,
+        "G" | "GB" => 1024 * 1024 * 1024,
+        "T" | "TB" => 1024_u64.pow(4),
+        _ => return Err(eyre!("Unknown size unit: {}", unit_part)),
+    };
+
+    Ok(number * multiplier)
+}
+
 /// Parse a memory string (like "2G", "1024M", "512") to megabytes
 pub(crate) fn parse_memory_to_mb(memory_str: &str) -> Result<u32> {
     let memory_str = memory_str.trim();

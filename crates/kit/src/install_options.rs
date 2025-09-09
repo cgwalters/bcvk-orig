@@ -1,0 +1,65 @@
+//! Common installation options shared across bootc-kit commands
+//!
+//! This module provides shared configuration structures for disk installation
+//! operations, ensuring consistency across run-install, libvirt-upload-disk,
+//! and other installation-related commands.
+
+use clap::Parser;
+use std::path::PathBuf;
+
+/// Common installation options for bootc disk operations
+///
+/// These options control filesystem configuration and storage paths
+/// for bootc installation commands. Use `#[clap(flatten)]` to include
+/// these in command-specific option structures.
+#[derive(Debug, Parser, Clone)]
+pub struct InstallOptions {
+    /// Root filesystem type (overrides bootc image default)
+    #[clap(long, help = "Root filesystem type (ext4, xfs, btrfs)")]
+    pub filesystem: Option<String>,
+
+    /// Custom root filesystem size (e.g., '10G', '5120M')
+    #[clap(long, help = "Root filesystem size (e.g., '10G', '5120M')")]
+    pub root_size: Option<String>,
+
+    /// Path to host container storage (auto-detected if not specified)
+    #[clap(
+        long,
+        help = "Path to host container storage (auto-detected if not specified)"
+    )]
+    pub storage_path: Option<PathBuf>,
+}
+
+impl InstallOptions {
+    /// Validate the filesystem type is supported (if specified)
+    pub fn validate_filesystem(&self) -> Result<(), String> {
+        if let Some(ref fs) = self.filesystem {
+            match fs.as_str() {
+                "ext4" | "xfs" | "btrfs" => Ok(()),
+                _ => Err(format!(
+                    "Unsupported filesystem type: {}. Supported types are: ext4, xfs, btrfs",
+                    fs
+                )),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get the bootc install command arguments for these options
+    pub fn to_bootc_args(&self) -> Vec<String> {
+        let mut args = vec![];
+
+        if let Some(ref filesystem) = self.filesystem {
+            args.push("--filesystem".to_string());
+            args.push(filesystem.clone());
+        }
+
+        if let Some(ref root_size) = self.root_size {
+            args.push("--root-size".to_string());
+            args.push(root_size.clone());
+        }
+
+        args
+    }
+}

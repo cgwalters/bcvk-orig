@@ -389,10 +389,12 @@ pub fn run_from_install_in_container() -> Result<()> {
     let install_opts = crate::run_install::RunInstallOpts {
         source_image: source_image.to_string(),
         target_disk: std::path::PathBuf::from(disk_path),
-        root_size: root_size.map(|s| s.to_string()),
-        filesystem: filesystem.to_string(),
-        via_loopback: false,
-        storage_path: Some(storage_path), // Use the mounted storage path
+        install: crate::install_options::InstallOptions {
+            filesystem: Some(filesystem.to_string()),
+            root_size: root_size.map(|s| s.to_string()),
+            storage_path: Some(storage_path), // Use the mounted storage path
+        },
+        disk_size: None,
         common: crate::run_ephemeral::CommonVmOpts {
             memory: None,
             vcpus: None,

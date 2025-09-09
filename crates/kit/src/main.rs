@@ -9,6 +9,8 @@ pub(crate) mod containerenv;
 mod envdetect;
 mod hostexec;
 mod images;
+mod install_options;
+mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
 mod qemu;
@@ -117,6 +119,14 @@ enum Commands {
     #[clap(name = "run-install")]
     RunInstall(run_install::RunInstallOpts),
 
+    /// Upload bootc disk images to libvirt with metadata annotations
+    ///
+    /// Combines run-install with libvirt integration to create and upload
+    /// disk images to libvirt storage pools. Automatically adds container
+    /// image metadata as libvirt annotations for tracking and management.
+    #[clap(name = "libvirt-upload-disk")]
+    LibvirtUploadDisk(libvirt_upload_disk::LibvirtUploadDiskOpts),
+
     /// Connect to running VMs via SSH
     ///
     /// Establishes secure shell connections to VMs running within containers.
@@ -177,6 +187,9 @@ fn main() -> Result<(), Report> {
         }
         Commands::RunInstall(opts) => {
             run_install::run(opts)?;
+        }
+        Commands::LibvirtUploadDisk(opts) => {
+            libvirt_upload_disk::run(opts)?;
         }
         Commands::Ssh(opts) => {
             // Use SSH connect via container - we need SSH key path

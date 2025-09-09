@@ -181,6 +181,7 @@ dependencies = [
  "libc",
  "nix",
  "rand 0.9.1",
+ "regex",
  "reqwest",
  "rustix",
  "serde",

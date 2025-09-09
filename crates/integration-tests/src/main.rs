@@ -7,6 +7,7 @@ use serde_json::Value;
 use xshell::{cmd, Shell};
 
 mod tests {
+    pub mod libvirt_upload_disk;
     pub mod mount_feature;
     pub mod run_ephemeral;
     pub mod run_install;
@@ -169,6 +170,51 @@ fn main() {
         }),
         Trial::test("virtiofsd_startup_validation", || {
             tests::run_install::test_virtiofsd_startup_validation();
+            Ok(())
+        }),
+        // libvirt-upload-disk tests
+        Trial::test("libvirt_upload_disk_help", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_help();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_skip_upload", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_skip_upload();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_pool_validation", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_pool_validation();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_volume_name_generation", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_volume_name_generation();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_filesystem_types", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_filesystem_types();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_metadata_feature", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_metadata_feature();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_custom_volume_name", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_custom_volume_name();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_vm_resources", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_vm_resources();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_kernel_args", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_kernel_args();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_integration", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_integration();
+            Ok(())
+        }),
+        Trial::test("libvirt_upload_disk_invalid_size", || {
+            tests::libvirt_upload_disk::test_libvirt_upload_disk_invalid_size();
             Ok(())
         }),
     ];
