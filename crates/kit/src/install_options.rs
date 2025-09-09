@@ -15,7 +15,7 @@ use std::path::PathBuf;
 #[derive(Debug, Parser, Clone)]
 pub struct InstallOptions {
     /// Root filesystem type (overrides bootc image default)
-    #[clap(long, help = "Root filesystem type (ext4, xfs, btrfs)")]
+    #[clap(long, help = "Root filesystem type (e.g. ext4, xfs, btrfs)")]
     pub filesystem: Option<String>,
 
     /// Custom root filesystem size (e.g., '10G', '5120M')
@@ -31,21 +31,6 @@ pub struct InstallOptions {
 }
 
 impl InstallOptions {
-    /// Validate the filesystem type is supported (if specified)
-    pub fn validate_filesystem(&self) -> Result<(), String> {
-        if let Some(ref fs) = self.filesystem {
-            match fs.as_str() {
-                "ext4" | "xfs" | "btrfs" => Ok(()),
-                _ => Err(format!(
-                    "Unsupported filesystem type: {}. Supported types are: ext4, xfs, btrfs",
-                    fs
-                )),
-            }
-        } else {
-            Ok(())
-        }
-    }
-
     /// Get the bootc install command arguments for these options
     pub fn to_bootc_args(&self) -> Vec<String> {
         let mut args = vec![];
