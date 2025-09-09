@@ -1,12 +1,36 @@
+# Working on this project
+
+Be sure you've read [README.md](`../README.md`) too of course.
+
 ## Building
 
 - There is a `Justfile` which supports commands, read it and use it.
   This wraps generic tools like `cargo check`, `cargo build`, and `cargo test` to verify
   the project compiles and unit tests work. This assumes these tools are in the current
   host environment.
-- The actual build process though is via `just build-container`
-  as the primary way this project runs is via podman, and then use
-  `just test-integration` to run the integration tests.
+- Use `just test-integration` to run the integration tests.
+
+## Testing
+
+### Unit tests
+```bash
+just test
+```
+
+### Integration tests
+```bash
+# Run all integration tests
+just test-integration
+
+# Run a specific integration test
+just test-integration-single <test_name>
+
+# Examples:
+just test-integration-single run_ephemeral_with_storage
+just test-integration-single run_install_to_disk
+```
+
+Integration tests require QEMU/KVM to be fully working as they launch actual VMs.
 
 ## Running
 
@@ -18,6 +42,11 @@ Then you can invoke `bck`.
 
 - Always run `cargo fmt` before making a git commit, and in
   general at the end of a series of code edits.
+
+## Code style
+
+Some use of emoji is OK, but avoid using it gratuitously. Especially
+don't use bulleted lists where each entry has an emoji prefix.
 
 ## Commit messages
 

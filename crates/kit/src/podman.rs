@@ -18,6 +18,12 @@ pub struct PodmanSystemInfo {
     pub store: Store,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ImageInspect {
+    pub size: u64,
+}
+
 pub fn get_system_info() -> Result<PodmanSystemInfo> {
     hostexec::podman()?
         .arg("system")
@@ -25,4 +31,21 @@ pub fn get_system_info() -> Result<PodmanSystemInfo> {
         .arg("--format=json")
         .run_and_parse_json()
         .map_err(|e| eyre!("podman system info failed: {}", e))
+}
+
+/// Get the size of a container image in bytes
+pub fn get_image_size(image: &str) -> Result<u64> {
+    let inspect_result: Vec<ImageInspect> = hostexec::podman()?
+        .arg("inspect")
+        .arg("--format=json")
+        .arg("--type=image")
+        .arg(image)
+        .run_and_parse_json()
+        .map_err(|e| eyre!("podman inspect failed for image {}: {}", image, e))?;
+
+    if inspect_result.is_empty() {
+        return Err(eyre!("No image found for: {}", image));
+    }
+
+    Ok(inspect_result[0].size)
 }

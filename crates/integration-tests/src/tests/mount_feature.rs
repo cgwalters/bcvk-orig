@@ -1,12 +1,25 @@
+//! Integration tests for mount features
+//!
+//! ⚠️  **CRITICAL INTEGRATION TEST POLICY** ⚠️
+//!
+//! INTEGRATION TESTS MUST NEVER "warn and continue" ON FAILURES!
+//!
+//! If something is not working:
+//! - Use `todo!("reason why this doesn't work yet")`
+//! - Use `panic!("clear error message")`
+//! - Use `assert!()` and `unwrap()` to fail hard
+//!
+//! NEVER use patterns like:
+//! - "Note: test failed - likely due to..."
+//! - "This is acceptable in CI/testing environments"
+//! - Warning and continuing on failures
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
-/// Get the path to the bck binary, checking BCK_PATH env var first, then falling back to "bck"
-fn get_bck_command() -> String {
-    std::env::var("BCK_PATH").unwrap_or_else(|_| "bck".to_string())
-}
+use crate::get_bck_command;
 
 /// Create a systemd unit that verifies a mount exists and contains expected content
 fn create_mount_verify_unit(
@@ -63,7 +76,7 @@ StandardError=journal+console
 }
 
 pub fn test_mount_feature_bind() {
-    let bck = get_bck_command();
+    let bck = get_bck_command().unwrap();
 
     // Create a temporary directory to test bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -126,7 +139,7 @@ pub fn test_mount_feature_bind() {
 }
 
 pub fn test_mount_feature_ro_bind() {
-    let bck = get_bck_command();
+    let bck = get_bck_command().unwrap();
 
     // Create a temporary directory to test read-only bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -188,7 +201,7 @@ pub fn test_mount_feature_ro_bind() {
 }
 
 pub fn test_mount_feature_multiple() {
-    let bck = get_bck_command();
+    let bck = get_bck_command().unwrap();
 
     // Create multiple temporary directories to test multiple mounts
     let temp_dir1 = TempDir::new().expect("Failed to create first temp directory");

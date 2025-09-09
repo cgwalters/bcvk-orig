@@ -5,7 +5,6 @@ use std::process::Command;
 
 use color_eyre::eyre::{eyre, Context, Report};
 use color_eyre::Result;
-use tracing::instrument;
 use xshell::{cmd, Shell};
 
 #[allow(clippy::type_complexity)]
@@ -29,7 +28,6 @@ fn install_tracing() {
         .init();
 }
 
-#[instrument]
 fn main() -> Result<(), Report> {
     install_tracing();
     color_eyre::install()?;
@@ -61,7 +59,6 @@ fn main() -> Result<(), Report> {
     Ok(())
 }
 
-#[instrument(skip(sh), name = "build")]
 fn build(sh: &Shell) -> Result<()> {
     cmd!(sh, "cargo build -p bootc-kit --release").run()?;
     cfg_if::cfg_if! {

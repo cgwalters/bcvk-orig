@@ -1,3 +1,9 @@
+//! Host command execution from containerized environments
+//!
+//! Executes commands on the host system from containers using systemd-run.
+//! Commands are bound to container lifecycle for automatic cleanup.
+//! Requires --privileged and --pid=host container flags.
+//!
 use std::ffi::OsStr;
 use std::io::BufRead;
 use std::os::unix::ffi::OsStrExt;
@@ -11,11 +17,17 @@ use rand::distr::SampleString;
 
 use crate::containerenv::ContainerExecutionInfo;
 
+/// Configuration for systemd-run execution
 #[derive(Debug, Default)]
 pub struct SystemdConfig {
+    /// Run detached without output capture (default: false uses --pipe)
     detached: bool,
 }
 
+/// Validate host execution environment
+///
+/// Returns None for host system (direct exec), Some(info) for valid container
+/// with --privileged and --pid=host, or error for insufficient privileges.
 fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInfo>> {
     // Check if we're in a toolbox environment - if so, we're on the host
     if std::env::var("TOOLBOX_PATH").is_ok() {
@@ -40,9 +52,10 @@ fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInf
     Ok(Some(info))
 }
 
-/// Generate a command instance which uses systemd-run to spawn the target
-/// command in the host environment. However, we use BindsTo= on our
-/// unit to ensure the lifetime of the command is bounded by the container.
+/// Create Command for host execution
+///
+/// Returns direct Command for host systems, or systemd-run wrapped Command
+/// for containers. Generated service units are bound to container lifecycle.
 pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<Command> {
     let exe = exe.as_ref();
     let config = config.unwrap_or_default();
@@ -84,9 +97,10 @@ pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<
     Ok(r)
 }
 
-/// Synchronously execute the provided command arguments on the host via `systemd-run`.
-/// File descriptors are inherited by default, and the command's result code is checked for errors.
-/// The default output streams (stdout and stderr) are inherited.
+/// Execute command on host with error handling
+///
+/// Convenience function that creates, executes, and validates command exit status.
+/// Inherits stdin/stdout/stderr from calling process.
 pub fn run<I, T>(exe: impl AsRef<OsStr>, args: I) -> Result<()>
 where
     I: IntoIterator<Item = T>,
@@ -97,12 +111,19 @@ where
     c.run().map_err(|e| eyre!("{e:?}"))
 }
 
-/// Run podman synchronously in the host namespace
+/// Create podman command for host execution
+///
+/// Convenience wrapper around `command("podman", None)` for container
+/// management operations that need host access.
+#[allow(dead_code)]
 pub fn podman() -> Result<Command> {
     command("podman", None)
 }
 
-/// Parse the output of the `env` command
+/// Parse environment variables from KEY=VALUE format
+///
+/// Parses output from `env` command into HashMap. Handles binary data
+/// and multiple `=` characters in values.
 #[allow(dead_code)]
 fn parse_env(e: impl BufRead) -> Result<HashMap<OsString, OsString>> {
     e.split(b'\n').try_fold(HashMap::new(), |mut r, line| {
@@ -128,6 +149,7 @@ mod tests {
 
     use super::*;
 
+    /// Test environment variable parsing
     #[test]
     fn test_parse_env() {
         let input = b"FOO=bar\nBAZ=quux\n";

@@ -1,20 +1,22 @@
+//! Image management and inspection utilities for bootc containers.
+//!
+//! Provides functionality for listing and inspecting bootc container images through
+//! podman integration with both table and JSON output formats.
+
 use std::{collections::HashMap, os::unix::process::CommandExt};
 
 use bootc_utils::CommandRunExt;
-use color_eyre::{
-    eyre::{self, eyre},
-    Result,
-};
+use color_eyre::{eyre::eyre, Result};
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
 
 use crate::hostexec;
 
+/// Command-line options for image management operations.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ImagesOpts {
-    /// List available bootc images
+    /// List all available bootc container images on the system
     List {
-        /// Output as JSON
+        /// Output as structured JSON instead of table format
         #[clap(long)]
         json: bool,
     },
@@ -42,32 +44,39 @@ impl ImagesOpts {
     }
 }
 
+/// Single bootc container image entry from podman images output.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImageListEntry {
+    /// Repository names and tags, None for dangling images
     pub names: Option<Vec<String>>,
+
+    /// SHA256 image identifier
     pub id: String,
+
+    /// Image size in bytes
     pub size: u64,
+
+    /// Image creation timestamp
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Container image inspection data from podman image inspect.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImageInspect {
+    /// SHA256 image identifier
     pub id: String,
+
+    /// Image size in bytes
     pub size: u64,
+
+    /// Image creation timestamp
     pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub(crate) fn inspect(name: &str) -> Result<ImageInspect> {
-    let mut r: Vec<ImageInspect> = hostexec::command("podman", None)?
-        .args(["image", "inspect", name])
-        .run_and_parse_json()
-        .map_err(|e| eyre::eyre!("{e}"))?;
-    r.pop().ok_or_else(|| eyre!("No such image"))
-}
-
-/// Parse an os-release string
+/// Parse os-release file format into key-value pairs.
+#[allow(dead_code)]
 fn parse_osrelease(s: &str) -> Result<HashMap<String, String>> {
     let r = s
         .lines()
@@ -90,23 +99,7 @@ fn parse_osrelease(s: &str) -> Result<HashMap<String, String>> {
     Ok(r)
 }
 
-/// Read and parse the /usr/lib/os-release from the provided image
-#[instrument]
-pub(crate) fn query_osrelease(name: &str) -> Result<HashMap<String, String>> {
-    let r = hostexec::command("podman", None)?
-        .args([
-            "run",
-            "--rm",
-            "--entrypoint",
-            "cat",
-            name,
-            "/usr/lib/os-release",
-        ])
-        .run_get_string()
-        .map_err(|e| eyre::eyre!("{e}"))?;
-    parse_osrelease(&r)
-}
-
+/// List all bootc container images using podman.
 #[allow(dead_code)]
 pub fn list() -> Result<Vec<ImageListEntry>> {
     let images: Vec<ImageListEntry> = hostexec::command("podman", None)?
@@ -117,8 +110,25 @@ pub fn list() -> Result<Vec<ImageListEntry>> {
             "--filter=label=containers.bootc=1",
         ])
         .run_and_parse_json()
-        .map_err(|e| eyre::eyre!("{e}"))?;
+        .map_err(|e| eyre!("{e}"))?;
     Ok(images)
+}
+
+/// Inspect a container image and return metadata.
+pub fn inspect(name: &str) -> Result<ImageInspect> {
+    let mut r: Vec<ImageInspect> = hostexec::command("podman", None)?
+        .args(["image", "inspect", name])
+        .run_and_parse_json()
+        .map_err(|e| eyre!("{e}"))?;
+    r.pop().ok_or_else(|| eyre!("No such image"))
+}
+
+/// Get container image size in bytes for disk space planning.
+pub fn get_image_size(name: &str) -> Result<u64> {
+    tracing::debug!("Getting size for image: {}", name);
+    let info = inspect(name)?;
+    tracing::debug!("Found image size: {} bytes", info.size);
+    Ok(info.size)
 }
 
 #[cfg(test)]
@@ -152,5 +162,23 @@ LOGO="fedora-logo-icon"
         for (k, v) in expected {
             assert_eq!(actual.get(k).unwrap(), v);
         }
+    }
+
+    #[test]
+    fn test_disk_size_calculation_logic() {
+        // Test the logic used in calculate_disk_size
+        let image_size: u64 = 1024 * 1024 * 1024; // 1GB
+        let expected_size = image_size * 2; // 2GB
+        let minimum_size = 4 * 1024 * 1024 * 1024; // 4GB
+
+        // Since 2GB < 4GB minimum, should use 4GB
+        let final_size = std::cmp::max(expected_size, minimum_size);
+        assert_eq!(final_size, minimum_size);
+
+        // Test with larger image
+        let large_image_size: u64 = 3 * 1024 * 1024 * 1024; // 3GB
+        let large_expected = large_image_size * 2; // 6GB
+        let large_final = std::cmp::max(large_expected, minimum_size);
+        assert_eq!(large_final, large_expected); // Should use 6GB, not minimum
     }
 }

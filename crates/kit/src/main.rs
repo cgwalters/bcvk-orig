@@ -3,31 +3,50 @@ use std::ffi::OsString;
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
-use tracing::instrument;
 
+mod container_entrypoint;
 pub(crate) mod containerenv;
 mod envdetect;
 mod hostexec;
 mod images;
+#[allow(dead_code)]
 mod podman;
 mod qemu;
 mod run_ephemeral;
+mod run_install;
+mod ssh;
+#[allow(dead_code)]
 mod sshcred;
 mod utils;
-mod virtiofsd;
+//mod vsock_listener;
 
+/// A comprehensive toolkit for developing and testing bootc containers.
+///
+/// bootc-kit provides a complete workflow for building, testing, and managing
+/// bootc containers using ephemeral VMs. Run bootc images as temporary VMs,
+/// install them to disk, or manage existing installations - all without
+/// requiring root privileges.
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
+/// Execute a command in the host context from within a container.
+///
+/// This allows containers to run host commands with proper isolation
+/// and resource management through the host execution system.
 #[derive(Parser)]
 struct HostExecOpts {
-    /// Binary to run
+    /// Binary executable to run on the host system
+    ///
+    /// Can be a full path or a command name available in PATH.
     bin: OsString,
 
-    /// Arguments to pass to the binary
+    /// Command-line arguments to pass to the binary
+    ///
+    /// All arguments after the binary name, including flags and options.
+    /// Supports arguments starting with hyphens.
     #[clap(allow_hyphen_values = true)]
     args: Vec<OsString>,
 }
@@ -43,22 +62,82 @@ enum DebugInternalsCmds {
     OpenTree { path: std::path::PathBuf },
 }
 
+/// SSH connection options for accessing running VMs.
+///
+/// Provides secure shell access to VMs running within containers,
+/// with automatic key management and connection routing.
+#[derive(Parser)]
+struct SshOpts {
+    /// Name or ID of the container running the target VM
+    ///
+    /// This should match the container name from podman or the VM ID
+    /// used when starting the ephemeral VM.
+    container_name: String,
+
+    /// Additional SSH client arguments to pass through
+    ///
+    /// Standard ssh arguments like -v for verbose output, -L for
+    /// port forwarding, or -o for SSH options.
+    #[clap(allow_hyphen_values = true, help = "SSH arguments like -v, -L, -o")]
+    args: Vec<String>,
+}
+
+/// Available bootc-kit commands for container and VM management.
 #[derive(Subcommand)]
 enum Commands {
-    /// Execute a command in the host context
+    /// Execute commands on the host system from within containers
+    ///
+    /// Allows containers to safely run host commands with proper isolation
+    /// and resource management. Useful for accessing host tools and services
+    /// that containers need to interact with.
     Hostexec(HostExecOpts),
-    /// Commands for bootc container imges
+
+    /// Manage and inspect bootc container images
+    ///
+    /// Discover, list, and inspect bootc containers available on the system.
+    /// Provides both human-readable and JSON output for automation.
     #[clap(subcommand)]
     Images(images::ImagesOpts),
-    /// Run a container image as an ephemeral VM with direct kernel boot
+
+    /// Run bootc containers as temporary VMs for testing and development
+    ///
+    /// Creates ephemeral VMs that boot directly from container images without
+    /// installation. Perfect for testing bootc images, running temporary
+    /// workloads, or development workflows. VMs are automatically cleaned
+    /// up when stopped.
+    #[clap(name = "run-ephemeral")]
     RunEphemeral(run_ephemeral::RunEphemeralOpts),
-    /// Code executed inside the target image
+
+    /// Install bootc images to persistent disk images
+    ///
+    /// Performs automated installation of bootc containers to disk images
+    /// using ephemeral VMs as the installation environment. Supports multiple
+    /// filesystems, custom sizing, and creates bootable disk images ready
+    /// for production deployment.
+    #[clap(name = "run-install")]
+    RunInstall(run_install::RunInstallOpts),
+
+    /// Connect to running VMs via SSH
+    ///
+    /// Establishes secure shell connections to VMs running within containers.
+    /// Automatically handles SSH key management, connection routing, and
+    /// authentication for seamless VM access.
+    Ssh(SshOpts),
+
+    /// Internal container entrypoint command (hidden from help)
     #[clap(hide = true)]
-    RunEphemeralImpl(run_ephemeral::RunEphemeralImplOpts),
+    ContainerEntrypoint(container_entrypoint::ContainerEntrypointOpts),
+
+    /// Internal debugging and diagnostic tools (hidden from help)
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
 }
 
+/// Install and configure the tracing/logging system.
+///
+/// Sets up structured logging with environment-based filtering,
+/// error layer integration, and console output formatting.
+/// Logs are filtered by RUST_LOG environment variable, defaulting to 'info'.
 fn install_tracing() {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::fmt;
@@ -77,7 +156,11 @@ fn install_tracing() {
         .init();
 }
 
-#[instrument]
+/// Main entry point for the bootc-kit CLI application.
+///
+/// Initializes logging, error handling, and command dispatch for all
+/// bootc-kit operations including VM management, SSH access, and
+/// container image handling.
 fn main() -> Result<(), Report> {
     install_tracing();
     color_eyre::install()?;
@@ -92,7 +175,20 @@ fn main() -> Result<(), Report> {
         Commands::RunEphemeral(opts) => {
             run_ephemeral::run(opts)?;
         }
-        Commands::RunEphemeralImpl(opts) => run_ephemeral::run_impl(opts)?,
+        Commands::RunInstall(opts) => {
+            run_install::run(opts)?;
+        }
+        Commands::Ssh(opts) => {
+            // Use SSH connect via container - we need SSH key path
+            // For now, assume key is in standard location
+            ssh::connect_via_container(
+                &opts.container_name,
+                &std::path::PathBuf::from("/tmp/ssh"),
+                "root",
+                opts.args,
+            )?;
+        }
+        Commands::ContainerEntrypoint(opts) => container_entrypoint::run(opts)?,
         Commands::DebugInternals(opts) => match opts.command {
             DebugInternalsCmds::OpenTree { path } => {
                 let fd = rustix::mount::open_tree(
@@ -102,7 +198,7 @@ fn main() -> Result<(), Report> {
                         | rustix::mount::OpenTreeFlags::OPEN_TREE_CLONE,
                 )?;
                 let fd = Dir::reopen_dir(&fd)?;
-                eprintln!("{:?}", fd.entries()?.into_iter().collect::<Vec<_>>());
+                tracing::debug!("{:?}", fd.entries()?.into_iter().collect::<Vec<_>>());
             }
         },
     }
