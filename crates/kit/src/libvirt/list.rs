@@ -31,6 +31,10 @@ pub struct LibvirtListOpts {
     /// Show all volumes (not just bootc volumes)
     #[clap(long)]
     pub all: bool,
+
+    /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
+    #[clap(short = 'c', long = "connect")]
+    pub connect: Option<String>,
 }
 
 /// Information about a bootc volume
@@ -103,9 +107,19 @@ impl BootcVolume {
 }
 
 impl LibvirtListOpts {
+    /// Build a virsh command with optional connection URI
+    fn virsh_command(&self) -> Command {
+        let mut cmd = Command::new("virsh");
+        if let Some(ref connect) = self.connect {
+            cmd.arg("-c").arg(connect);
+        }
+        cmd
+    }
+
     /// Check if storage pool exists and is accessible
     fn check_pool_exists(&self) -> Result<()> {
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["pool-info", &self.pool])
             .output()?;
 
@@ -123,7 +137,8 @@ impl LibvirtListOpts {
 
     /// List all volumes in the storage pool
     pub fn list_pool_volumes(&self) -> Result<Vec<String>> {
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["vol-list", &self.pool])
             .output()?;
 
@@ -157,7 +172,8 @@ impl LibvirtListOpts {
     /// Get volume information including metadata
     pub fn get_volume_info(&self, volume_name: &str) -> Result<BootcVolume> {
         // Get volume path
-        let path_output = Command::new("virsh")
+        let path_output = self
+            .virsh_command()
             .args(&["vol-path", volume_name, "--pool", &self.pool])
             .output()?;
 
@@ -168,7 +184,8 @@ impl LibvirtListOpts {
         };
 
         // Get volume info (size, format)
-        let info_output = Command::new("virsh")
+        let info_output = self
+            .virsh_command()
             .args(&["vol-info", volume_name, "--pool", &self.pool])
             .output()?;
 
@@ -193,7 +210,8 @@ impl LibvirtListOpts {
         }
 
         // Get metadata from volume XML
-        let xml_output = Command::new("virsh")
+        let xml_output = self
+            .virsh_command()
             .args(&["vol-dumpxml", volume_name, "--pool", &self.pool])
             .output()?;
 

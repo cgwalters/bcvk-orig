@@ -48,6 +48,10 @@ pub struct LibvirtCreateOpts {
     #[clap(long)]
     pub vnc: bool,
 
+    /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
+    #[clap(short = 'c', long = "connect")]
+    pub connect: Option<String>,
+
     /// VNC port (default: auto-assign)
     #[clap(long)]
     pub vnc_port: Option<u16>,
@@ -88,6 +92,15 @@ pub struct BootcVolumeMetadata {
 }
 
 impl LibvirtCreateOpts {
+    /// Build a virsh command with optional connection URI
+    fn virsh_command(&self) -> Command {
+        let mut cmd = Command::new("virsh");
+        if let Some(ref connect) = self.connect {
+            cmd.arg("-c").arg(connect);
+        }
+        cmd
+    }
+
     /// Check if the input appears to be a container image (vs volume name)
     fn is_container_image(&self) -> bool {
         // Container images typically contain '/' or ':' characters
@@ -131,6 +144,7 @@ impl LibvirtCreateOpts {
             memory: "2048".to_string(),
             vcpus: 2,
             karg: vec![],
+            connect: self.connect.clone(),
             skip_upload: true,
             keep_temp: false,
         };
@@ -139,7 +153,8 @@ impl LibvirtCreateOpts {
         let expected_volume_path = format!("{}.raw", expected_volume_name);
 
         // Check if this specific volume exists
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["vol-info", &expected_volume_path, "--pool", &self.pool])
             .output()?;
 
@@ -182,6 +197,7 @@ impl LibvirtCreateOpts {
             memory: self.install_memory.clone(),
             vcpus: self.install_vcpus,
             karg: self.karg.clone(),
+            connect: self.connect.clone(),
             skip_upload: false,
             keep_temp: false,
         };
@@ -206,7 +222,8 @@ impl LibvirtCreateOpts {
             format!("{}.raw", volume_name)
         };
 
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["vol-info", &volume_path, "--pool", &self.pool])
             .output()?;
 
@@ -221,7 +238,8 @@ impl LibvirtCreateOpts {
         }
 
         // Get the full volume path
-        let vol_path_output = Command::new("virsh")
+        let vol_path_output = self
+            .virsh_command()
             .args(&["vol-path", &volume_path, "--pool", &self.pool])
             .output()?;
 
@@ -241,7 +259,8 @@ impl LibvirtCreateOpts {
             format!("{}.raw", volume_name)
         };
 
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["vol-dumpxml", &volume_path, "--pool", &self.pool])
             .output()?;
         if !output.status.success() {
@@ -259,7 +278,8 @@ impl LibvirtCreateOpts {
 
     /// Check if domain already exists
     fn check_domain_exists(&self, domain_name: &str) -> bool {
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["dominfo", domain_name])
             .output();
 
@@ -294,10 +314,12 @@ impl LibvirtCreateOpts {
         // If domain exists and force is specified, undefine it first
         if self.check_domain_exists(&domain_name) && self.force {
             info!("Domain exists, removing it first (--force specified)");
-            let _ = Command::new("virsh")
+            let _ = self
+                .virsh_command()
                 .args(&["destroy", &domain_name])
                 .output();
-            let _ = Command::new("virsh")
+            let _ = self
+                .virsh_command()
                 .args(&["undefine", &domain_name])
                 .output();
         }
@@ -342,7 +364,8 @@ impl LibvirtCreateOpts {
         debug!("Domain XML: {}", domain_xml);
 
         // Define the domain
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["define", "/dev/stdin"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -366,7 +389,8 @@ impl LibvirtCreateOpts {
         // Start domain if requested
         if self.start {
             info!("Starting domain '{}'", domain_name);
-            let output = Command::new("virsh")
+            let output = self
+                .virsh_command()
                 .args(&["start", &domain_name])
                 .output()?;
 

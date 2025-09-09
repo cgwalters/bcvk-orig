@@ -46,6 +46,10 @@ pub struct LibvirtUploadOpts {
     #[clap(long)]
     pub karg: Vec<String>,
 
+    /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
+    #[clap(short = 'c', long = "connect")]
+    pub connect: Option<String>,
+
     /// Skip uploading to libvirt (useful for testing)
     #[clap(long)]
     pub skip_upload: bool,
@@ -56,6 +60,15 @@ pub struct LibvirtUploadOpts {
 }
 
 impl LibvirtUploadOpts {
+    /// Build a virsh command with optional connection URI
+    fn virsh_command(&self) -> Command {
+        let mut cmd = Command::new("virsh");
+        if let Some(ref connect) = self.connect {
+            cmd.arg("-c").arg(connect);
+        }
+        cmd
+    }
+
     /// Generate a sanitized volume name from the container image
     pub fn get_volume_name(&self) -> String {
         if let Some(ref name) = self.volume_name {
@@ -102,7 +115,8 @@ impl LibvirtUploadOpts {
 
     /// Check if libvirt storage pool exists
     fn check_pool_exists(&self) -> Result<()> {
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&["pool-info", &self.pool])
             .output()?;
 
@@ -132,12 +146,14 @@ impl LibvirtUploadOpts {
         let volume_path = format!("{}.raw", volume_name);
 
         // Delete existing volume if it exists
-        let _ = Command::new("virsh")
+        let _ = self
+            .virsh_command()
             .args(&["vol-delete", &volume_path, "--pool", &self.pool])
             .output();
 
         // Use the provided disk size
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&[
                 "vol-create-as",
                 &self.pool,
@@ -155,7 +171,8 @@ impl LibvirtUploadOpts {
 
         // Upload the disk image to the volume
         info!("Uploading disk image to volume '{}'", volume_path);
-        let output = Command::new("virsh")
+        let output = self
+            .virsh_command()
             .args(&[
                 "vol-upload",
                 &volume_path,
