@@ -279,7 +279,6 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
             ssh_user: "root".to_string(),
             ssh_identity: None,
         },
-        test_mode: false,
     };
 
     run_install(install_opts)?;

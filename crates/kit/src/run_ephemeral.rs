@@ -4,6 +4,7 @@
 //! host /usr bind-mount, and virtiofs for container image filesystem.
 //! Supports SSH access, command execution, and host directory mounts.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::Command;
@@ -447,9 +448,13 @@ pub fn run_qemu_in_container(
 
     // Handle --execute or --execute-sh option
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
-    let (execute_output_file, execute_status_file) = if opts.common.execute.is_some()
-        || opts.common.execute_sh.is_some()
-    {
+    let execute = opts
+        .common
+        .execute_sh
+        .as_deref()
+        .map(|v| Cow::Owned(format!("/bin/sh -c '{}'", v.replace("'", "'\\''"))))
+        .or(opts.common.execute.as_deref().map(Cow::Borrowed));
+    let (execute_output_file, execute_status_file) = if let Some(execute_cmd) = execute {
         // Create a temp directory that will be mounted into the container
         let temp_dir = tempfile::tempdir()
             .context("Failed to create temporary directory for execute output")?;
@@ -485,14 +490,8 @@ pub fn run_qemu_in_container(
             "execute-status:/run/execute-output/execute-status.json"
         ));
 
-        // Pass the execute command/script as environment variables
-        if let Some(ref execute_cmd) = opts.common.execute {
-            cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
-            debug!("Added execute command: {}", execute_cmd);
-        } else if let Some(ref execute_sh) = opts.common.execute_sh {
-            cmd.args(["-e", &format!("BOOTC_EXECUTE_SH={}", execute_sh)]);
-            debug!("Added execute shell script: {}", execute_sh);
-        }
+        cmd.args(["-e", &format!("BOOTC_EXECUTE_CMD={}", execute_cmd)]);
+        debug!("Added execute command: {}", execute_cmd);
 
         let output_path = output_file.clone();
         let status_path = status_file.clone();
@@ -1193,12 +1192,8 @@ WantedBy=local-fs.target
 
     // Handle execute command or script by creating systemd unit directly
     let execute_cmd = std::env::var("BOOTC_EXECUTE_CMD").ok();
-    let execute_sh = std::env::var("BOOTC_EXECUTE_SH").ok();
 
-    if let Some(exec_cmd) = execute_cmd.or(execute_sh
-        .as_ref()
-        .map(|sh| format!("/bin/sh -c '{}'", sh.replace("'", "'\\''"))))
-    {
+    if let Some(exec_cmd) = execute_cmd {
         // Create systemd units directory if it doesn't exist
         if !std::path::Path::new("/run/systemd-units/system").exists() {
             fs::create_dir_all("/run/systemd-units/system")?;
@@ -1287,7 +1282,7 @@ fi
         let service_content = format!(
             r#"[Unit]
 Description=Execute Script Service
-After=multi-user.target systemd-udev-settle.service
+After= systemd-udev-settle.service
 # Wait for virtio-serial devices to be ready
 Requires=systemd-udev-settle.service
 # Give extra time for device initialization

@@ -409,7 +409,6 @@ pub fn run_from_install_in_container() -> Result<()> {
             ssh_user: "root".to_string(),
             ssh_identity: None,
         },
-        test_mode: false,
     };
 
     debug!(

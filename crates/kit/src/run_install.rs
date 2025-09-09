@@ -78,6 +78,7 @@ use crate::run_ephemeral::{run as run_ephemeral, CommonVmOpts, RunEphemeralOpts}
 use crate::{images, utils};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
+use std::borrow::Cow;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -103,10 +104,6 @@ pub struct RunInstallOpts {
     /// Common VM configuration options
     #[clap(flatten)]
     pub common: CommonVmOpts,
-
-    /// Enable test mode (hidden development option)
-    #[clap(long, hide = true)]
-    pub test_mode: bool,
 }
 
 impl RunInstallOpts {
@@ -161,35 +158,34 @@ impl RunInstallOpts {
     }
 
     /// Generate the complete bootc installation command
-    ///
-    /// Creates a shell script with storage setup and bootc install command.
-    /// See module-level docs for the overall installation architecture.
     fn generate_bootc_install_command(&self) -> String {
-        // Load the storage setup script from the external file
-        let storage_setup = include_str!("setup_storage.sh");
-
         let source_imgref = format!("containers-storage:{}", self.source_image);
 
-        let mut bootc_cmd = vec![
-            "bootc".to_string(),
-            "install".to_string(),
-            "to-disk".to_string(),
-            "--source-imgref".to_string(),
-            source_imgref,
-        ];
-
-        // Add install options
-        bootc_cmd.extend(self.install.to_bootc_args());
-
-        // Target device in VM (mounted via virtio-blk)
-        bootc_cmd.push("/dev/disk/by-id/virtio-output".to_string());
-
-        // Combine storage setup and bootc command
-        format!(
-            "{}\necho '=== Starting bootc installation ==='\n{}",
-            storage_setup,
-            bootc_cmd.join(" ")
-        )
+        [
+            "env",
+            // This is the magic trick to pull the storage from the host
+            "STORAGE_OPTS=additionalimagestore=/run/virtiofs-mnt-hoststorage/",
+            "bootc",
+            "install",
+            "to-disk",
+            // Default to being a generic image here, if someone cares they can override this
+            "--generic-image",
+            "--source-imgref",
+        ]
+        .into_iter()
+        .map(Cow::Borrowed)
+        .chain(std::iter::once(source_imgref.into()))
+        .chain(self.install.to_bootc_args().into_iter().map(Cow::Owned))
+        .chain(std::iter::once(Cow::Borrowed(
+            "/dev/disk/by-id/virtio-output",
+        )))
+        .fold(String::new(), |mut acc, elt| {
+            if !acc.is_empty() {
+                acc.push(' ');
+            }
+            acc.push_str(&*elt);
+            acc
+        })
     }
 
     /// Calculate the optimal target disk size based on the source image or explicit size
@@ -257,16 +253,7 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
 
     // Phase 3: Installation command generation
     // Generate complete script including storage setup and bootc install
-    let bootc_install_command = if opts.test_mode {
-        // Test mode: verify VM and storage setup without actual installation
-        "echo 'Test mode: Checking storage mount...' && ls -la /run/virtiofs-mnt-hoststorage | head -3 && echo 'SUCCESS: Test installation completed!' && poweroff".to_string()
-    } else {
-        opts.generate_bootc_install_command()
-    };
-
-    if opts.common.debug {
-        debug!("Bootc install command: {}", bootc_install_command);
-    }
+    let bootc_install_command = opts.generate_bootc_install_command();
 
     // Phase 4: Ephemeral VM configuration
     let common_opts = opts.common.clone();
@@ -297,7 +284,7 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
     // Phase 5: Final VM configuration and execution
     let mut final_opts = ephemeral_opts;
     // Set the installation script to execute in the VM
-    final_opts.common.execute_sh = Some(bootc_install_command);
+    final_opts.common.execute = Some(bootc_install_command);
 
     // Ensure clean shutdown after installation completes
     final_opts
@@ -338,7 +325,6 @@ mod tests {
             },
             disk_size: None,
             common: CommonVmOpts::default(),
-            test_mode: false,
         };
 
         opts.prepare_target_disk()?;
@@ -357,7 +343,6 @@ mod tests {
             },
             disk_size: None,
             common: CommonVmOpts::default(),
-            test_mode: false,
         };
 
         let cmd = opts.generate_bootc_install_command();
@@ -381,7 +366,6 @@ mod tests {
             },
             disk_size: None,
             common: CommonVmOpts::default(),
-            test_mode: false,
         };
 
         let size = opts.calculate_disk_size()?;

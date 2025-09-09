@@ -165,14 +165,6 @@ fn main() {
             tests::run_install::test_run_install_to_disk();
             Ok(())
         }),
-        Trial::test("run_install_test_mode", || {
-            tests::run_install::test_run_install_test_mode();
-            Ok(())
-        }),
-        Trial::test("virtiofsd_startup_validation", || {
-            tests::run_install::test_virtiofsd_startup_validation();
-            Ok(())
-        }),
         // libvirt-upload-disk tests
         Trial::test("libvirt_upload_disk_help", || {
             tests::libvirt_upload_disk::test_libvirt_upload_disk_help();
