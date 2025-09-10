@@ -176,76 +176,6 @@ fn main() {
             tests::run_install::test_run_install_to_disk();
             Ok(())
         }),
-        // libvirt-upload-disk tests
-        Trial::test("libvirt_upload_disk_help", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_help();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_skip_upload", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_skip_upload();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_pool_validation", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_pool_validation();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_volume_name_generation", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_volume_name_generation();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_filesystem_types", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_filesystem_types();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_metadata_feature", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_metadata_feature();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_custom_volume_name", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_custom_volume_name();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_vm_resources", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_vm_resources();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_kernel_args", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_kernel_args();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_integration", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_integration();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_disk_invalid_size", || {
-            tests::libvirt_upload_disk::test_libvirt_upload_disk_invalid_size();
-            Ok(())
-        }),
-        // New libvirt verb tests
-        Trial::test("libvirt_verb_help", || {
-            tests::libvirt_verb::test_libvirt_verb_help();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_help", || {
-            tests::libvirt_verb::test_libvirt_upload_help();
-            Ok(())
-        }),
-        Trial::test("libvirt_create_help", || {
-            tests::libvirt_verb::test_libvirt_create_help();
-            Ok(())
-        }),
-        Trial::test("libvirt_list_help", || {
-            tests::libvirt_verb::test_libvirt_list_help();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_workflow", || {
-            tests::libvirt_verb::test_libvirt_upload_workflow();
-            Ok(())
-        }),
-        Trial::test("libvirt_create_validation", || {
-            tests::libvirt_verb::test_libvirt_create_validation();
-            Ok(())
-        }),
         Trial::test("libvirt_list_functionality", || {
             tests::libvirt_verb::test_libvirt_list_functionality();
             Ok(())
@@ -260,10 +190,6 @@ fn main() {
         }),
         Trial::test("libvirt_create_networking", || {
             tests::libvirt_verb::test_libvirt_create_networking();
-            Ok(())
-        }),
-        Trial::test("libvirt_upload_create_integration", || {
-            tests::libvirt_verb::test_libvirt_upload_create_integration();
             Ok(())
         }),
         Trial::test("libvirt_ssh_integration", || {

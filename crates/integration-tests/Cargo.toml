@@ -16,3 +16,4 @@ serde = "1.0.199"
 serde_json = "1.0.116"
 libtest-mimic = "0.7.3"
 tempfile = "3"
+uuid = { version = "1.18.1", features = ["v4"] }
