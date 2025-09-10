@@ -8,12 +8,14 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::Command;
 
+use camino::Utf8Path;
 use clap::Parser;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use itertools::Itertools;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
+use tempfile::tempdir;
 use tracing::debug;
 
 /// Default memory size in MB
@@ -393,6 +395,9 @@ pub fn run_qemu_in_container(
         debug!("Mounted SSH key at /tmp/ssh");
     }
 
+    // Propagate this by default
+    cmd.arg("--env=RUST_LOG");
+
     // Set debug mode environment variable if requested
     if opts.common.debug {
         cmd.args(["-e", "DEBUG_MODE=true"]);
@@ -413,36 +418,21 @@ pub fn run_qemu_in_container(
     }
 
     // Handle --execute
+    let temp_dir = tempdir()?;
+    let temp_dir: &Utf8Path = temp_dir.path().try_into().unwrap();
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
     let (execute_output_file, execute_status_file) = if !opts.common.execute.is_empty() {
-        // Create a temp directory that will be mounted into the container
-        let temp_dir = tempfile::tempdir()
-            .context("Failed to create temporary directory for execute output")?;
-        let output_file = temp_dir.path().join("execute-output.txt");
-        let status_file = temp_dir.path().join("execute-status.txt");
-
-        debug!(
-            "Created temporary directory for execute output at: {:?}",
-            temp_dir.path()
-        );
+        let output_path = temp_dir.join("execute-output.txt");
+        let status_path = temp_dir.join("execute-status.txt");
 
         // Create the output and status files so they exist for mounting
-        std::fs::File::create(&output_file)
-            .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
-        std::fs::File::create(&status_file)
-            .with_context(|| format!("Failed to create status file: {}", status_file.display()))?;
-
-        debug!(
-            "Created execute output files: {} and {}",
-            output_file.display(),
-            status_file.display()
-        );
+        std::fs::File::create(&output_path)
+            .with_context(|| format!("Failed to create output file: {output_path}"))?;
+        std::fs::File::create(&status_path)
+            .with_context(|| format!("Failed to create status file: {status_path}"))?;
 
         // Mount the temp directory into the container
-        cmd.args([
-            "-v",
-            &format!("{}:/run/execute-output", temp_dir.path().display()),
-        ]);
+        cmd.args(["-v", &format!("{temp_dir}:/run/execute-output")]);
 
         // Add virtio-serial devices for execute output and status (using the mounted paths)
         all_serial_devices.push(format!("execute:/run/execute-output/execute-output.txt"));
@@ -450,14 +440,6 @@ pub fn run_qemu_in_container(
             "executestatus:/run/execute-output/execute-status.txt"
         ));
 
-        let output_path = output_file.clone();
-        let status_path = status_file.clone();
-        // Keep the temp dir alive by leaking it (we'll clean up on exit)
-        let temp_path = temp_dir.into_path();
-        debug!(
-            "Temp directory will be preserved at: {}",
-            temp_path.display()
-        );
         (Some(output_path), Some(status_path))
     } else {
         (None, None)

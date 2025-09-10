@@ -38,6 +38,7 @@ itertools = "0.14.0"
 vsock = "0.5"
 nix = { version = "0.29", features = ["socket"] }
 libc = "0.2"
+camino = "1.1.12"
 
 [dev-dependencies]
 similar-asserts = "1.5"
