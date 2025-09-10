@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   push:
@@ -7,11 +7,12 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
+      
       - name: Install dependencies
         run: |
           sudo apt update
@@ -20,8 +21,11 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         
-      - name: Build native binary
-        run: cargo build --release
-
-      - name: Run tests
-        run: cargo test
+      - name: Build
+        run: just build
+        
+      - name: Run unit tests
+        run: just test
+        
+      - name: Run integration tests
+        run: just test-integration

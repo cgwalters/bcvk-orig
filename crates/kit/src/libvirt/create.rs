@@ -146,8 +146,6 @@ impl LibvirtCreateOpts {
             vcpus: default_vcpus(),
             karg: vec![],
             connect: self.connect.clone(),
-            skip_upload: true,
-            keep_temp: false,
         };
 
         let expected_volume_name = temp_upload_opts.get_cached_volume_name(image_digest);
@@ -199,8 +197,6 @@ impl LibvirtCreateOpts {
             vcpus: self.install_vcpus,
             karg: self.karg.clone(),
             connect: self.connect.clone(),
-            skip_upload: false,
-            keep_temp: false,
         };
 
         // Run the upload

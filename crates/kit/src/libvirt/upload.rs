@@ -9,7 +9,7 @@ use crate::run_install::{run as run_install, RunInstallOpts};
 use crate::{images, utils};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tracing::info;
 
@@ -50,14 +50,6 @@ pub struct LibvirtUploadOpts {
     /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
     #[clap(short = 'c', long = "connect")]
     pub connect: Option<String>,
-
-    /// Skip uploading to libvirt (useful for testing)
-    #[clap(long)]
-    pub skip_upload: bool,
-
-    /// Keep temporary disk image after upload
-    #[clap(long)]
-    pub keep_temp: bool,
 }
 
 impl LibvirtUploadOpts {
@@ -107,11 +99,9 @@ impl LibvirtUploadOpts {
     }
 
     /// Create a temporary file path for the disk image
-    fn get_temp_disk_path(&self) -> Result<PathBuf> {
-        let temp_dir = std::env::temp_dir();
-        let volume_name = self.get_volume_name();
-        let temp_path = temp_dir.join(format!("{}.raw", volume_name));
-        Ok(temp_path)
+    fn get_temp_disk_path(&self) -> Result<tempfile::NamedTempFile> {
+        let r = tempfile::NamedTempFile::with_prefix("bcvk-libvirt-upload")?;
+        Ok(r)
     }
 
     /// Check if libvirt storage pool exists
@@ -224,7 +214,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
 
     let install_opts = RunInstallOpts {
         source_image: opts.source_image.clone(),
-        target_disk: temp_disk.clone(),
+        target_disk: temp_disk.path().to_owned(),
         install: opts.install.clone(),
         disk_size: Some(disk_size),
         common: crate::run_ephemeral::CommonVmOpts {
@@ -244,25 +234,13 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
 
     run_install(install_opts)?;
 
-    // Phase 4: Upload to libvirt (unless skipped)
-    if !opts.skip_upload {
-        opts.upload_to_libvirt(&temp_disk, disk_size, &image_digest)?;
+    opts.upload_to_libvirt(temp_disk.path(), disk_size, &image_digest)?;
 
-        let volume_name = opts.get_cached_volume_name(&image_digest);
-        info!(
-            "Successfully uploaded disk as volume '{}' to pool '{}'",
-            volume_name, opts.pool
-        );
-        info!("Container image annotation added: {}", opts.source_image);
-    }
-
-    // Phase 5: Cleanup temporary disk (unless keep_temp is set)
-    if !opts.keep_temp && !opts.skip_upload {
-        info!("Cleaning up temporary disk");
-        std::fs::remove_file(&temp_disk)?;
-    } else if opts.keep_temp {
-        info!("Keeping temporary disk at: {:?}", temp_disk);
-    }
-
+    let volume_name = opts.get_cached_volume_name(&image_digest);
+    info!(
+        "Successfully uploaded disk as volume '{}' to pool '{}'",
+        volume_name, opts.pool
+    );
+    info!("Container image annotation added: {}", opts.source_image);
     Ok(())
 }

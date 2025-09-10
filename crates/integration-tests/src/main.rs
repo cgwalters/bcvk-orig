@@ -49,13 +49,6 @@ pub(crate) fn cleanup_integration_test_containers() {
     }
 }
 
-/// Cleanup a specific container by name
-pub(crate) fn cleanup_container_by_name(name: &str) {
-    let _ = std::process::Command::new("podman")
-        .args(["rm", "-f", name])
-        .output();
-}
-
 mod tests {
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;

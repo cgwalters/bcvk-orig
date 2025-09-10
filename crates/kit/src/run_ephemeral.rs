@@ -63,7 +63,10 @@ pub struct CommonPodmanOptions {
     #[clap(long = "name", help = "Assign a name to the container")]
     pub name: Option<String>,
 
-    /// Add metadata to the container in key=value form
+    #[clap(
+        long = "label",
+        help = "Add metadata to the container in key=value form"
+    )]
     pub label: Vec<String>,
 }
 
