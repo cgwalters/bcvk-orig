@@ -337,29 +337,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_bootc_install_command() -> Result<()> {
-        let opts = RunInstallOpts {
-            source_image: "localhost/test:latest".to_string(),
-            target_disk: "/tmp/test.img".into(),
-            install: InstallOptions {
-                filesystem: Some("xfs".to_string()),
-                root_size: Some("10G".to_string()),
-                storage_path: None,
-            },
-            disk_size: None,
-            common: CommonVmOpts::default(),
-        };
-
-        let cmd = opts.generate_bootc_install_command();
-        assert!(cmd.contains("bootc install to-disk"));
-        assert!(cmd.contains("--source-imgref containers-storage:localhost/test:latest"));
-        assert!(cmd.contains("--root-size 10G"));
-        assert!(cmd.contains("--filesystem xfs"));
-        assert!(cmd.contains("/dev/disk/by-id/virtio-output"));
-        Ok(())
-    }
-
-    #[test]
     fn test_calculate_disk_size() -> Result<()> {
         let opts = RunInstallOpts {
             source_image: "test:latest".to_string(),

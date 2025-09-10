@@ -1034,7 +1034,6 @@ Description=Mount virtiofs {}
 DefaultDependencies=no
 After=systemd-remount-fs.service
 Before=local-fs.target shutdown.target
-Wants=local-fs.target
 
 [Mount]
 What={}

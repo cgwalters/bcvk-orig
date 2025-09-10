@@ -9,7 +9,7 @@ use crate::run_install::{run as run_install, RunInstallOpts};
 use crate::{images, utils};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
 
