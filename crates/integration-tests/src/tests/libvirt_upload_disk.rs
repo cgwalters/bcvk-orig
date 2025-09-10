@@ -6,6 +6,4 @@
 //! - Container image metadata annotation
 //! - Error handling and validation
 
-use std::process::Command;
-
-use crate::get_bck_command;
+// use crate::get_bck_command;

@@ -12,7 +12,6 @@ use camino::Utf8Path;
 use clap::Parser;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
-use itertools::Itertools;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
@@ -34,7 +33,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
-use crate::{podman, utils};
+use crate::{podman, utils, CONTAINER_STATEDIR};
 use std::process::Child;
 
 /// Common container lifecycle options for podman commands.
@@ -114,22 +113,12 @@ pub struct CommonVmOpts {
     )]
     pub execute: Vec<String>,
 
-    #[clap(long, short = 'K', help = "Generate SSH keypair and enable SSH access")]
+    #[clap(
+        long,
+        short = 'K',
+        help = "Generate SSH keypair and inject via systemd credentials"
+    )]
     pub ssh_keygen: bool,
-
-    #[clap(
-        long,
-        default_value = "root",
-        help = "SSH username for key injection and connections"
-    )]
-    pub ssh_user: String,
-
-    #[clap(
-        long,
-        conflicts_with = "ssh_keygen",
-        help = "Use existing SSH private key file instead of generating new"
-    )]
-    pub ssh_identity: Option<String>,
 }
 
 impl CommonVmOpts {
@@ -228,33 +217,6 @@ pub fn run_qemu_in_container(
         let perms = Permissions::from_mode(0o755);
         f.set_permissions(perms)?;
     }
-
-    let mut extra_args = opts.common.kernel_args.iter().map(|s| s.as_str()).join(" ");
-
-    // Handle SSH key generation and credential injection
-    let ssh_key_path = if opts.common.ssh_keygen || opts.common.ssh_identity.is_some() {
-        if let Some(ref identity_path) = opts.common.ssh_identity {
-            // Use existing SSH key
-            Some(identity_path.clone())
-        } else {
-            // Generate new SSH key
-            let vm_id = crate::ssh::generate_vm_id();
-            let cache_dir = crate::ssh::get_vm_cache_dir(&vm_id)?;
-            let key_pair = crate::ssh::generate_ssh_keypair(&cache_dir, "ssh_key")?;
-
-            // Create credential and add to kernel args
-            let credential = crate::sshcred::karg_for_root_ssh(&key_pair.public_key_content)?;
-            if !extra_args.is_empty() {
-                extra_args.push(' ');
-            }
-            extra_args.push_str(&credential);
-
-            debug!("Generated SSH key and added credential to kernel args");
-            Some(key_pair.private_key_path.to_string_lossy().to_string())
-        }
-    } else {
-        None
-    };
 
     let self_exe = std::env::current_exe()?;
     let self_exe = self_exe.as_str()?;
@@ -397,12 +359,6 @@ pub fn run_qemu_in_container(
     // Mount systemd units directory if specified
     if let Some(ref units_dir) = opts.systemd_units_dir {
         cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
-    }
-
-    // Mount SSH key if available
-    if let Some(ref key_path) = ssh_key_path {
-        cmd.args(["-v", &format!("{}:/tmp/ssh:ro", key_path)]);
-        debug!("Mounted SSH key at /tmp/ssh");
     }
 
     // Propagate this by default
@@ -844,7 +800,7 @@ impl Drop for VirtiofsdCleanupGuard {
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
 /// generates systemd mount units, sets up command execution, launches QEMU.
 /// DEBUG_MODE=true drops to shell instead of QEMU.
-pub(crate) fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
+pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
     use std::path::Path;
@@ -1135,6 +1091,17 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     // Wait for socket to be created with proper checking
     qemu::wait_for_virtiofsd_socket(&virtiofsd_config.socket_path, Duration::from_secs(10))?;
 
+    std::fs::create_dir_all(CONTAINER_STATEDIR)?;
+
+    // Handle SSH key generation and credential injection
+    if opts.common.ssh_keygen {
+        let key_pair = crate::ssh::generate_default_keypair()?;
+        // Create credential and add to kernel args
+        let pubkey = std::fs::read_to_string(key_pair.public_key_path.as_path())?;
+        let credential = crate::sshcred::karg_for_root_ssh(&pubkey)?;
+        opts.common.kernel_args.push(credential);
+        debug!("Generated SSH key and added credential to kernel args");
+    }
     if debug_mode {
         debug!("=== DEBUG MODE: Dropping into bash shell ===");
         debug!("Environment setup complete. You can:");

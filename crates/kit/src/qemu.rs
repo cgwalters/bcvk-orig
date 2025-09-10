@@ -178,7 +178,7 @@ pub enum BootMode {
         /// VirtIO-FS socket for root filesystem
         virtiofs_socket: String,
     },
-    /// Boot from disk image (production-like)
+    #[allow(dead_code)]
     DiskBoot {
         primary_disk: String,
         /// Use UEFI instead of BIOS

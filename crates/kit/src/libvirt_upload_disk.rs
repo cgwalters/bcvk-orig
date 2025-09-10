@@ -270,8 +270,6 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
             virtio_serial_out: vec![],
             execute: Default::default(),
             ssh_keygen: false,
-            ssh_user: "root".to_string(),
-            ssh_identity: None,
         },
     };
 

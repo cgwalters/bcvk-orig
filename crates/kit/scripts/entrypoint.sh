@@ -18,6 +18,8 @@ init_tmproot() {
     ln -sf usr/lib64 lib64
     ln -sf usr/sbin sbin
     mkdir -p {etc,var,dev,proc,run,sys,tmp}
+    # Ensure we have /etc/passwd as ssh-keygen wants it for bad reasons
+    systemd-sysusers --root $(pwd) &>/dev/null
 
     # Shared directory between containers
     mkdir /run/inner-shared

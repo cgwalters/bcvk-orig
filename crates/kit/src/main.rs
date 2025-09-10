@@ -14,6 +14,7 @@ mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
+#[allow(dead_code)]
 mod qemu;
 mod run_ephemeral;
 mod run_install;
@@ -21,7 +22,8 @@ mod ssh;
 #[allow(dead_code)]
 mod sshcred;
 mod utils;
-//mod vsock_listener;
+
+pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
 
 /// A comprehensive toolkit for developing and testing bootc containers.
 ///
