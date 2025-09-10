@@ -272,11 +272,8 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
         image: opts.get_installer_image().to_string(),
         common: common_opts,
         podman: crate::run_ephemeral::CommonPodmanOptions {
-            tty: false,         // No interactive terminal needed
-            interactive: false, // Non-interactive installation
-            detach: false,      // Wait for installation to complete
-            rm: true,           // Clean up container after installation
-            name: None,         // Let VM choose container name
+            rm: true, // Clean up container after installation
+            ..Default::default()
         },
         bind_mounts: Vec::new(),        // No additional bind mounts needed
         ro_bind_mounts: Vec::new(),     // No additional ro bind mounts needed

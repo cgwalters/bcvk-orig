@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
-use crate::get_bck_command;
+use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
 
 /// Create a systemd unit that verifies a mount exists and contains expected content
 fn create_mount_verify_unit(
@@ -105,6 +105,7 @@ pub fn test_mount_feature_bind() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             "--console",
             "--bind",
             &format!("{}:testmount", temp_dir.path().display()),
@@ -168,6 +169,7 @@ pub fn test_mount_feature_ro_bind() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label=bootc-kit.integration-test=1",
             "--console",
             "--ro-bind",
             &format!("{}:romount", temp_dir.path().display()),
@@ -280,6 +282,7 @@ StandardError=journal+console
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label=bootc-kit.integration-test=1",
             "--console",
             "--bind",
             &format!("{}:mount1", temp_dir1.path().display()),

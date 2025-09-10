@@ -17,7 +17,7 @@
 use std::process::Command;
 use tempfile::TempDir;
 
-use crate::get_bck_command;
+use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
 
 /// Test actual bootc installation to a disk image
 pub fn test_run_install_to_disk() {
@@ -38,6 +38,7 @@ pub fn test_run_install_to_disk() {
             "600s", // 10 minute timeout for installation
             &bck,
             "run-install",
+            INTEGRATION_TEST_LABEL,
             "quay.io/centos-bootc/centos-bootc:stream10",
             disk_path.to_str().unwrap(),
         ])

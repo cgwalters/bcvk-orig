@@ -62,6 +62,9 @@ pub struct CommonPodmanOptions {
 
     #[clap(long = "name", help = "Assign a name to the container")]
     pub name: Option<String>,
+
+    /// Add metadata to the container in key=value form
+    pub label: Vec<String>,
 }
 
 /// Common VM configuration options for hardware, networking, and features.
@@ -313,7 +316,11 @@ pub fn run_qemu_in_container(
     // Run the container with the setup script
     let mut cmd = Command::new("podman");
     cmd.arg("run");
+    // We always have a label
     cmd.arg("--label=bootc.kit=1");
+    for label in opts.podman.label.iter() {
+        cmd.arg(format!("--label={label}"));
+    }
     cmd.arg(format!("--net={}", opts.common.net_string().as_str()));
 
     // Add container name if specified

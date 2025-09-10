@@ -16,7 +16,7 @@
 
 use std::process::Command;
 
-use crate::get_bck_command;
+use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
 
 pub fn get_container_kernel_version(image: &str) -> String {
     // Run container to get its kernel version
@@ -59,6 +59,7 @@ pub fn test_run_ephemeral_correct_kernel() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             IMAGE,
             "--karg",
             "systemd.unit=poweroff.target",
@@ -95,6 +96,7 @@ pub fn test_run_ephemeral_poweroff() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             "quay.io/fedora/fedora-bootc:42",
             "--karg",
             "systemd.unit=poweroff.target",
@@ -120,6 +122,7 @@ pub fn test_run_ephemeral_with_memory_limit() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             "--memory",
             "1024",
             "--karg",
@@ -146,6 +149,7 @@ pub fn test_run_ephemeral_with_vcpus() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             "--vcpus",
             "2",
             "--karg",
@@ -175,6 +179,7 @@ pub fn test_run_ephemeral_execute() {
             &bck,
             "run-ephemeral",
             "--rm",
+            INTEGRATION_TEST_LABEL,
             "--execute",
             script,
             "quay.io/fedora/fedora-bootc:42",
@@ -229,6 +234,7 @@ pub fn test_run_ephemeral_ssh_key_generation() {
         .args([
             "run-ephemeral",
             "--ssh-keygen",
+            INTEGRATION_TEST_LABEL,
             "--detach",
             "--rm",
             IMAGE,
@@ -305,7 +311,8 @@ pub fn test_run_ephemeral_ssh_credential_injection() {
             "180s",
             &bck,
             "run-ephemeral",
-            "--ssh-keygen", 
+            "--ssh-keygen",
+            INTEGRATION_TEST_LABEL,
             "--rm",
             IMAGE,
             "--execute",
@@ -368,6 +375,7 @@ pub fn test_run_ephemeral_container_ssh_access() {
         .args([
             "run-ephemeral",
             "--ssh-keygen",
+            INTEGRATION_TEST_LABEL,
             "--detach",
             "--name",
             &container_name,
@@ -460,6 +468,7 @@ pub fn test_run_ephemeral_vsock_systemd_debugging() {
     let output = Command::new(&bck)
         .args([
             "run-ephemeral",
+            INTEGRATION_TEST_LABEL,
             "--detach",
             "--name",
             &container_name,
