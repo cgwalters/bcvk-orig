@@ -450,32 +450,9 @@ pub fn test_run_ephemeral_vsock_systemd_debugging() {
 
     eprintln!("Testing AF_VSOCK systemd debugging in run-ephemeral");
 
-    // Generate a unique container name
-    let container_name = format!(
-        "vsock-test-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-
-    eprintln!(
-        "Starting detached VM with AF_VSOCK debugging, container name: {}",
-        container_name
-    );
-
     // Start VM in detached mode to test AF_VSOCK debugging
     let output = Command::new(&bck)
-        .args([
-            "run-ephemeral",
-            INTEGRATION_TEST_LABEL,
-            "--detach",
-            "--name",
-            &container_name,
-            "--execute",
-            "sleep 10", // Run for 10 seconds to allow systemd messages
-            IMAGE,
-        ])
+        .args(["run-ephemeral", INTEGRATION_TEST_LABEL, "--detach", IMAGE])
         .output()
         .expect("Failed to start detached VM for vsock testing");
 
@@ -486,89 +463,32 @@ pub fn test_run_ephemeral_vsock_systemd_debugging() {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!("Detached VM started: {}", stdout);
+    let cid = stdout.trim();
+    eprintln!("Detached VM started: {}", cid);
 
-    // Poll for READY=1 in systemd logs with 60s timeout
     eprintln!("Polling for READY=1 in AF_VSOCK systemd debug log (60s timeout)...");
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(60);
     let mut found_ready = false;
-    let mut last_log_content = String::new();
 
     while start_time.elapsed() < timeout {
-        let log_check = Command::new("podman")
-            .args(["exec", &container_name, "cat", "/run/systemd-guest.txt"])
-            .output();
-
-        match log_check {
-            Ok(output) => {
-                if output.status.success() {
-                    let log_content = String::from_utf8_lossy(&output.stdout);
-                    last_log_content = log_content.to_string();
-
-                    // Check for systemd notifications in the log content
-                    if log_content.contains("multi-user.target") || log_content.contains("STATUS=")
-                    {
-                        eprintln!("✓ Found systemd notifications in AF_VSOCK debug log!");
-                        eprintln!("Log content ({} bytes):", log_content.len());
-
-                        // Show first few lines
-                        for (i, line) in log_content.lines().take(10).enumerate() {
-                            eprintln!("  [{}] {}", i + 1, line);
-                        }
-
-                        if log_content.lines().count() > 10 {
-                            eprintln!("  ... ({} more lines)", log_content.lines().count() - 10);
-                        }
-
-                        found_ready = true;
-                        break;
-                    } else if !log_content.is_empty() {
-                        eprintln!(
-                            "Log exists ({} bytes) but no systemd notifications yet, continuing to poll...",
-                            log_content.len()
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error checking log (continuing): {}", e);
-            }
+        let st = Command::new("podman")
+            .args([
+                "exec",
+                cid,
+                "grep",
+                "-q",
+                "READY=1",
+                "/run/systemd-guest.txt",
+            ])
+            .status()
+            .unwrap();
+        if st.success() {
+            found_ready = true;
+            break;
         }
 
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-
-    // FAIL HARD if we didn't find READY=1
-    let log_preview = if last_log_content.is_empty() {
-        "(empty - AF_VSOCK may not be working)".to_string()
-    } else {
-        last_log_content
-            .lines()
-            .take(5)
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    assert!(
-        found_ready,
-        "AF_VSOCK systemd debugging test FAILED: Did not find systemd notifications in logs within 60s timeout. \
-        Last log content ({} bytes): {}",
-        last_log_content.len(),
-        log_preview
-    );
-
-    // Clean up the container
-    let cleanup_output = Command::new("podman")
-        .args(["stop", &container_name])
-        .output();
-
-    if let Ok(cleanup) = cleanup_output {
-        eprintln!(
-            "Container cleanup: {}",
-            String::from_utf8_lossy(&cleanup.stdout)
-        );
-    }
-
-    eprintln!("AF_VSOCK systemd debugging test completed");
+    assert!(found_ready);
 }
