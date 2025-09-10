@@ -78,14 +78,6 @@ impl LibvirtUploadDiskOpts {
         format!("bootc-{}", name)
     }
 
-    /// Create a temporary file path for the disk image
-    fn get_temp_disk_path(&self) -> Result<PathBuf> {
-        let temp_dir = std::env::temp_dir();
-        let volume_name = self.get_volume_name();
-        let temp_path = temp_dir.join(format!("{}.raw", volume_name));
-        Ok(temp_path)
-    }
-
     /// Check if libvirt storage pool exists
     fn check_pool_exists(&self) -> Result<()> {
         let output = Command::new("virsh")
@@ -255,8 +247,10 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
     };
 
     // Phase 2: Create temporary disk path
-    let temp_disk = opts.get_temp_disk_path()?;
-    info!("Using temporary disk: {:?}", temp_disk);
+    let td = tempfile::TempDir::new()?;
+    let td = td.path();
+    let temp_disk = td.join("disk.img");
+    info!("Using temporary disk: {temp_disk:?}");
 
     // Phase 3: Run installation to create disk image
     info!("Running bootc installation to create disk image");
