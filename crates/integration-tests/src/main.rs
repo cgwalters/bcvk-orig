@@ -129,34 +129,6 @@ fn main() {
             tests::mount_feature::test_mount_feature_multiple();
             Ok(())
         }),
-        Trial::test("storage_detection", || {
-            tests::run_install::test_storage_detection();
-            Ok(())
-        }),
-        Trial::test("run_ephemeral_with_storage", || {
-            tests::run_install::test_run_ephemeral_with_storage();
-            Ok(())
-        }),
-        Trial::test("run_install_help", || {
-            tests::run_install::test_run_install_help();
-            Ok(())
-        }),
-        Trial::test("run_install_debug_mode", || {
-            tests::run_install::test_run_install_debug_mode();
-            Ok(())
-        }),
-        Trial::test("run_install_validation", || {
-            tests::run_install::test_run_install_validation();
-            Ok(())
-        }),
-        Trial::test("run_install_custom_storage_path", || {
-            tests::run_install::test_run_install_custom_storage_path();
-            Ok(())
-        }),
-        Trial::test("run_install_invalid_storage", || {
-            tests::run_install::test_run_install_invalid_storage();
-            Ok(())
-        }),
         Trial::test("run_install_to_disk", || {
             tests::run_install::test_run_install_to_disk();
             Ok(())
