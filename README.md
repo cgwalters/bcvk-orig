@@ -16,7 +16,6 @@ for `podman`. It does require a virt stack (qemu, virtiofsd)
 in the host environment.
 
 ```bash
-# VM with custom resources
 bcvk run-ephemeral -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
 bcvk ssh mytestvm
 ```
@@ -28,21 +27,9 @@ bcvk run-install quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
 ```
 
 ### Image management
-```bash
-# List bootc images
-bcvk images list
 
-# List as JSON
-bcvk images list --json
-```
-
-## Command Comparison
-
-| Command | Purpose | Environment | Use Case |
-|---------|---------|-------------|----------|
-| `run-ephemeral` | Run container images as VMs | Container-based | Quick testing, development |
-| `run-install` | Install bootc to disk images | Container-based | Create persistent disk images |
-| `run-disk` | Boot from disk images | Host QEMU | Run existing disk images |
+There's a convenient helper function which filters by all container images
+with the `containers.bootc=1` label: `bcvk images list`
 
 ## Goals
 
@@ -59,5 +46,6 @@ Related projects and content:
 
 ## Development
 
-See docs/HACKING.md
+See [docs/HACKING.md](docs/HACKING.md).
+
 
