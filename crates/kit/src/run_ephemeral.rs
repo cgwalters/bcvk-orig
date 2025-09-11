@@ -1,11 +1,95 @@
 //! Ephemeral VM execution using hybrid container-VM approach.
 //!
-//! Runs QEMU inside privileged Podman containers with KVM access,
-//! host /usr bind-mount, and virtiofs for container image filesystem.
-//! Supports SSH access, command execution, and host directory mounts.
+//! This module implements a sophisticated architecture for running container images as
+//! ephemeral VMs by orchestrating a multi-stage execution flow through privileged
+//! containers, namespace isolation, and VirtioFS filesystem sharing.
+//!
+//! # Architecture Overview
+//!
+//! The system uses a "hybrid container-VM" approach that runs QEMU inside privileged
+//! Podman containers with KVM access. This combines container isolation with full
+//! kernel VM capabilities.
+//!
+//! ## Execution Flow
+//!
+//! The execution follows this chain:
+//! 1. **Host Process**: `bootc-kit run-ephemeral` invoked on host
+//! 2. **Container Launch**: Podman privileged container with KVM and host mounts
+//! 3. **Namespace Setup**: bwrap creates isolated namespace with hybrid rootfs  
+//! 4. **Binary Re-execution**: Same binary re-executes with `container-entrypoint`
+//! 5. **VM Launch**: QEMU starts with VirtioFS root and additional mounts
+//!
+//! ## Key Components
+//!
+//! ### Phase 1: Container Setup (`run_qemu_in_container`)
+//! - Runs on the host system
+//! - Serializes CLI options to JSON via `BCK_CONFIG` environment variable
+//! - Mounts critical resources into container:
+//!   - `/run/selfexe`: The bootc-kit binary itself (for re-execution)
+//!   - `/run/source-image`: Target container image via `--mount=type=image`
+//!   - `/run/hostusr`: Host `/usr` directory (read-only, for QEMU/tools)
+//!   - `/var/lib/bcvk/entrypoint`: Embedded entrypoint.sh script
+//! - Handles real-time output streaming for `--execute` commands
+//!
+//! ### Phase 2: Hybrid Rootfs Creation (entrypoint.sh)
+//! The entrypoint script creates a hybrid root filesystem at `/run/tmproot`:
+//! ```text
+//! /run/tmproot/
+//! ├── usr/       → bind mount to /run/hostusr (host binaries)
+//! ├── bin/       → symlink to usr/bin
+//! ├── lib/       → symlink to usr/lib
+//! └── [other dirs created empty for container compatibility]
+//! ```
+//!
+//! ### Phase 3: Namespace Isolation (bwrap)
+//! Uses bubblewrap to create isolated namespace:
+//! - New mount namespace with `/run/tmproot` as root
+//! - Shared `/run/inner-shared` for virtiofsd socket communication
+//! - Proper `/proc`, `/dev`, `/tmp` mounts
+//! - Re-executes binary: `bwrap ... -- /run/selfexe container-entrypoint`
+//!
+//! ### Phase 4: VM Execution (`run_impl`)
+//! - Runs inside the container after namespace setup
+//! - Extracts kernel/initramfs from container image
+//! - Spawns virtiofsd daemons for filesystem sharing:
+//!   - Main daemon: shares `/run/source-image` as VM root
+//!   - Additional daemons: one per host mount (`--bind`/`--ro-bind`)
+//! - Generates systemd `.mount` units for virtiofs mounts
+//! - Configures and launches QEMU with VirtioFS root
+//!
+//! ## VirtioFS Architecture
+//!
+//! The system uses VirtioFS for high-performance filesystem sharing:
+//! - **Root FS**: Container image mounted via main virtiofsd at `/run/inner-shared/virtiofs.sock`
+//! - **Host Mounts**: Separate virtiofsd per mount at `/run/inner-shared/virtiofs-<name>.sock`
+//! - **VM Access**: Mounts appear at `/run/virtiofs-mnt-<name>` via systemd units
+//!
+//! ## Command Execution (`--execute`)
+//!
+//! For running commands inside the VM:
+//! 1. Creates systemd services (`bootc-execute.service`, `bootc-execute-finish.service`)
+//! 2. Uses VirtioSerial devices for output (`execute`) and status (`executestatus`)
+//! 3. Streams output in real-time via monitoring thread on host
+//! 4. Captures exit codes via systemd service status
+//!
+//! ## Security Model
+//!
+//! - **Privileged Container**: Required for KVM and namespace operations
+//! - **Read-only Host Access**: Host `/usr` mounted read-only
+//! - **SELinux**: Disabled within container only (`--security-opt=label=disable`)
+//! - **Network Isolation**: Default "none" unless explicitly configured
+//! - **VirtioFS Sandboxing**: Relies on VM isolation for security
+//!
+//! ## Configuration Passing
+//!
+//! All CLI options are preserved through the execution chain via JSON serialization:
+//! - Host serializes `RunEphemeralOpts` to `BCK_CONFIG` environment variable
+//! - Container entrypoint deserializes and re-applies all settings
+//! - Ensures perfect fidelity of user options across process boundaries
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use camino::Utf8Path;
@@ -14,7 +98,6 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
-use tempfile::tempdir;
 use tracing::debug;
 
 /// Default memory size in MB
@@ -197,11 +280,7 @@ pub struct RunEphemeralOpts {
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
-/// Returns (container_status, command_exit_code) - command exit takes precedence.
-pub fn run_qemu_in_container(
-    opts: RunEphemeralOpts,
-    entrypoint_cmd: Option<&str>,
-) -> Result<(std::process::ExitStatus, Option<i32>)> {
+pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
 
     let script = include_str!("../scripts/entrypoint.sh");
@@ -376,42 +455,14 @@ pub fn run_qemu_in_container(
     let config = serde_json::to_string(&opts).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
-    // Pass through BCK_RUN_FROM_INSTALL_CONFIG if it exists
-    if let Ok(run_from_install_config) = std::env::var("BCK_RUN_FROM_INSTALL_CONFIG") {
-        cmd.args([
-            "-e",
-            &format!("BCK_RUN_FROM_INSTALL_CONFIG={}", run_from_install_config),
-        ]);
-        debug!("Passing BCK_RUN_FROM_INSTALL_CONFIG to container");
-    }
-
-    // Handle --execute
-    let temp_dir = tempdir()?;
-    let temp_dir: &Utf8Path = temp_dir.path().try_into().unwrap();
+    // Handle --execute output files and virtio-serial devices
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
-    let (execute_output_file, execute_status_file) = if !opts.common.execute.is_empty() {
-        let output_path = temp_dir.join("execute-output.txt");
-        let status_path = temp_dir.join("execute-status.txt");
-
-        // Create the output and status files so they exist for mounting
-        std::fs::File::create(&output_path)
-            .with_context(|| format!("Failed to create output file: {output_path}"))?;
-        std::fs::File::create(&status_path)
-            .with_context(|| format!("Failed to create status file: {status_path}"))?;
-
-        // Mount the temp directory into the container
-        cmd.args(["-v", &format!("{temp_dir}:/run/execute-output")]);
-
-        // Add virtio-serial devices for execute output and status (using the mounted paths)
-        all_serial_devices.push(format!("execute:/run/execute-output/execute-output.txt"));
-        all_serial_devices.push(format!(
-            "executestatus:/run/execute-output/execute-status.txt"
-        ));
-
-        (Some(output_path), Some(status_path))
-    } else {
-        (None, None)
-    };
+    if !opts.common.execute.is_empty() {
+        // Add virtio-serial devices for execute output and status
+        // These will be created inside the container at /run/execute-output/
+        all_serial_devices.push("execute:/run/execute-output/execute-output.txt".to_string());
+        all_serial_devices.push("executestatus:/run/execute-output/execute-status.txt".to_string());
+    }
 
     // Pass virtio-serial devices as environment variable
     if !all_serial_devices.is_empty() {
@@ -430,7 +481,6 @@ pub fn run_qemu_in_container(
     }
 
     cmd.args([&opts.image, ENTRYPOINT]);
-    cmd.args(entrypoint_cmd);
 
     // Log the full command line if requested
     if opts.log_cmdline {
@@ -441,177 +491,9 @@ pub fn run_qemu_in_container(
         debug!("Executing: podman {}", args.join(" "));
     }
 
-    // If we have execute output, spawn the container process and stream output concurrently
-    // TODO: This streaming logic should live inside the inner implementation, not the outer
-    // logic. In fact we should just use Command().exec to truly replace our process with
-    // podman after this and not do anything else.
-    let status = if let Some(ref output_file) = execute_output_file {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader, Seek, SeekFrom};
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::thread;
-        use std::time::Duration;
-
-        debug!("Starting container with real-time output streaming");
-        let mut child = cmd.spawn().context("Failed to spawn QEMU container")?;
-
-        // Clone the path for the thread
-        let output_file_clone = output_file.clone();
-        let finished = Arc::new(AtomicBool::new(false));
-        let finished_clone = finished.clone();
-
-        let output_thread = thread::spawn(move || {
-            let mut file_position = 0u64;
-            let mut last_size = 0u64;
-            let mut creation_timeout = 0;
-            const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
-
-            // Wait for the file to be created with better timeout handling
-            while !output_file_clone.exists() && !finished_clone.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(100));
-                creation_timeout += 1;
-                if creation_timeout >= MAX_CREATION_TIMEOUT {
-                    debug!(
-                        "Output file creation timeout after {}ms",
-                        MAX_CREATION_TIMEOUT * 100
-                    );
-                    return;
-                }
-            }
-
-            if !output_file_clone.exists() {
-                debug!("Process finished before output file was created");
-                return; // Exit early if process finished before file was created
-            }
-
-            debug!("Output file created, starting to read");
-
-            loop {
-                if let Ok(metadata) = std::fs::metadata(&output_file_clone) {
-                    let current_size = metadata.len();
-                    if current_size > last_size {
-                        if let Ok(mut file) = File::open(&output_file_clone) {
-                            if let Ok(new_position) = file.seek(SeekFrom::Start(file_position)) {
-                                if new_position != file_position {
-                                    debug!(
-                                        "File seek position mismatch: expected {}, got {}",
-                                        file_position, new_position
-                                    );
-                                }
-
-                                let reader = BufReader::new(file);
-                                let mut bytes_read = 0u64;
-
-                                for line in reader.lines() {
-                                    if let Ok(line) = line {
-                                        println!("{}", line);
-                                        std::io::Write::flush(&mut std::io::stdout()).ok();
-                                        // More accurate byte counting: line length + newline character
-                                        bytes_read += line.as_bytes().len() as u64 + 1;
-                                    }
-                                }
-
-                                // Update position based on actual bytes read
-                                file_position += bytes_read;
-                            }
-                            last_size = current_size;
-                        }
-                    }
-                }
-
-                // Check if we should exit
-                if finished_clone.load(Ordering::Relaxed) {
-                    // Process finished, read any remaining output with improved handling
-                    debug!(
-                        "Process finished, reading final output from position {}",
-                        file_position
-                    );
-                    if let Ok(mut file) = File::open(&output_file_clone) {
-                        if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
-                            let reader = BufReader::new(file);
-
-                            for line in reader.lines() {
-                                if let Ok(line) = line {
-                                    println!("{}", line);
-                                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            debug!("Output streaming thread finished");
-        });
-
-        // Wait for the container to complete
-        let status = child.wait().context("Failed to wait for QEMU container")?;
-
-        // Signal the output thread to finish
-        finished.store(true, Ordering::Relaxed);
-
-        // Wait for the output thread to finish
-        let _ = output_thread.join();
-
-        status
-    } else {
-        // No execute output, run normally
-        cmd.status().context("Failed to run QEMU in container")?
-    };
-
-    // Check for execute status and return appropriate exit code
-    let execute_exit_code = if let Some(status_file) = execute_status_file {
-        debug!("Checking for execute status file: {:?}", status_file);
-        if status_file.exists() {
-            debug!("Status file exists, reading content");
-            let r = std::fs::read_to_string(&status_file)?;
-            let lines = r.lines();
-            let mut code = None;
-            for line in lines {
-                let Some(codeval) = line.strip_prefix("ExecMainStatus=") else {
-                    continue;
-                };
-                let codeval: i32 = codeval.parse().context("Parsing ExecMainStatus")?;
-                code = Some(codeval);
-                break;
-            }
-            if code.is_none() {
-                tracing::warn!("Failed to find ExecMainStatus");
-            }
-            code
-        } else {
-            tracing::warn!("Missing status file");
-            None
-        }
-    } else {
-        None
-    };
-
-    Ok((status, execute_exit_code))
-}
-
-/// Main entry point for ephemeral VM execution.
-/// Handles exit codes: command execution takes precedence, accepts VM exit code 1 for poweroff.target.
-pub fn run(opts: RunEphemeralOpts) -> Result<()> {
-    // Run QEMU inside the container with the hybrid rootfs approach
-    let (status, execute_exit_code) = run_qemu_in_container(opts, None)?;
-
-    // If we have an execute command, prioritize its exit code over QEMU's exit code
-    if let Some(exit_code) = execute_exit_code {
-        if exit_code != 0 {
-            return Err(eyre!(
-                "Execute command failed with exit code: {}",
-                exit_code
-            ));
-        }
-    }
-
-    debug!("qemu exited: {status:?}");
-    Ok(())
+    // At this point our process is replaced by `podman`, we are just a wrapper for creating
+    // a container image and nothing else lives past that event.
+    return Err(cmd.exec()).context("execve");
 }
 
 /// Process --mount-disk-file specs: parse file:name format, create sparse files if needed (2x image size),
@@ -995,6 +877,14 @@ WantedBy=local-fs.target
         }
     }
 
+    // Handle --execute: create temp directory and setup virtio-serial devices
+    if !opts.common.execute.is_empty() {
+        // Create the output files for execute
+        std::fs::create_dir_all("/run/execute-output")?;
+        std::fs::File::create("/run/execute-output/execute-output.txt")?;
+        std::fs::File::create("/run/execute-output/execute-status.txt")?;
+    }
+
     match opts.common.execute.as_slice() {
         [] => {}
         elts => {
@@ -1154,8 +1044,11 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         }
 
         // Add virtio-serial devices
-        for serial_device in virtio_serial_devices {
-            qemu_config.add_virtio_serial_out(serial_device.name, serial_device.output_file);
+        for serial_device in &virtio_serial_devices {
+            qemu_config.add_virtio_serial_out(
+                serial_device.name.clone(),
+                serial_device.output_file.clone(),
+            );
         }
 
         // Add virtio-blk devices
@@ -1168,9 +1061,155 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         qemu_config.systemd_notify = Some(logf);
 
         debug!("Starting QEMU with systemd debugging enabled");
-        let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
 
-        qemu.wait()?;
+        // Handle --execute output streaming if needed
+        if !opts.common.execute.is_empty() {
+            // Find the execute output files that were passed via BOOTC_VIRTIO_SERIAL
+            let mut execute_output_file = None;
+            let mut execute_status_file = None;
+
+            for serial_device in &virtio_serial_devices {
+                if serial_device.name == "execute" {
+                    execute_output_file = Some(serial_device.output_file.clone());
+                } else if serial_device.name == "executestatus" {
+                    execute_status_file = Some(serial_device.output_file.clone());
+                }
+            }
+
+            if let Some(output_file) = execute_output_file {
+                use std::io::{BufRead, BufReader, Seek, SeekFrom};
+                use std::sync::atomic::{AtomicBool, Ordering};
+                use std::sync::Arc;
+                use std::thread;
+                use std::time::Duration;
+
+                debug!("Starting QEMU with real-time output streaming for execute commands");
+
+                // Spawn QEMU in background
+                let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
+
+                // Set up output streaming thread
+                let output_file_path = output_file.clone();
+                let finished = Arc::new(AtomicBool::new(false));
+                let finished_clone = finished.clone();
+
+                let output_thread = thread::spawn(move || {
+                    let mut file_position = 0u64;
+                    let mut last_size = 0u64;
+                    let mut creation_timeout = 0;
+                    const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
+
+                    // Wait for the file to be populated
+                    while creation_timeout < MAX_CREATION_TIMEOUT
+                        && !finished_clone.load(Ordering::Relaxed)
+                    {
+                        if let Ok(metadata) = std::fs::metadata(&output_file_path) {
+                            if metadata.len() > 0 {
+                                break;
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                        creation_timeout += 1;
+                    }
+
+                    if creation_timeout >= MAX_CREATION_TIMEOUT {
+                        debug!(
+                            "Output file content timeout after {}ms",
+                            MAX_CREATION_TIMEOUT * 100
+                        );
+                        return;
+                    }
+
+                    debug!("Output streaming started");
+
+                    loop {
+                        if let Ok(metadata) = std::fs::metadata(&output_file_path) {
+                            let current_size = metadata.len();
+                            if current_size > last_size {
+                                if let Ok(mut file) = File::open(&output_file_path) {
+                                    if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
+                                        let reader = BufReader::new(file);
+                                        let mut bytes_read = 0u64;
+
+                                        for line in reader.lines() {
+                                            if let Ok(line) = line {
+                                                println!("{}", line);
+                                                std::io::Write::flush(&mut std::io::stdout()).ok();
+                                                bytes_read += line.as_bytes().len() as u64 + 1;
+                                            }
+                                        }
+
+                                        file_position += bytes_read;
+                                    }
+                                    last_size = current_size;
+                                }
+                            }
+                        }
+
+                        // Check if we should exit
+                        if finished_clone.load(Ordering::Relaxed) {
+                            // Read any remaining output
+                            if let Ok(mut file) = File::open(&output_file_path) {
+                                if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
+                                    let reader = BufReader::new(file);
+                                    for line in reader.lines() {
+                                        if let Ok(line) = line {
+                                            println!("{}", line);
+                                            std::io::Write::flush(&mut std::io::stdout()).ok();
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+
+                        thread::sleep(Duration::from_millis(100));
+                    }
+
+                    debug!("Output streaming thread finished");
+                });
+
+                // Wait for QEMU to complete
+                qemu.wait()?;
+
+                // Signal the output thread to finish
+                finished.store(true, Ordering::Relaxed);
+
+                // Wait for the output thread to finish
+                let _ = output_thread.join();
+
+                // Check for execute status
+                if let Some(status_file) = execute_status_file {
+                    debug!("Checking for execute status file: {}", status_file);
+                    if std::path::Path::new(&status_file).exists() {
+                        debug!("Status file exists, reading content");
+                        let r = std::fs::read_to_string(&status_file)?;
+                        for line in r.lines() {
+                            if let Some(codeval) = line.strip_prefix("ExecMainStatus=") {
+                                let exit_code: i32 =
+                                    codeval.parse().context("Parsing ExecMainStatus")?;
+                                if exit_code != 0 {
+                                    return Err(eyre!(
+                                        "Execute command failed with exit code: {}",
+                                        exit_code
+                                    ));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No execute output file but commands were specified
+                let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
+                qemu.wait()?;
+            }
+        } else {
+            // No execute commands, run normally
+            let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
+            qemu.wait()?;
+        }
+
         debug!("QEMU completed successfully");
     } // Close the else block
 
