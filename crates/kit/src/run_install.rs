@@ -104,6 +104,12 @@ pub struct RunInstallOpts {
     /// Common VM configuration options
     #[clap(flatten)]
     pub common: CommonVmOpts,
+
+    #[clap(
+        long = "label",
+        help = "Add metadata to the container in key=value form"
+    )]
+    pub label: Vec<String>,
 }
 
 impl RunInstallOpts {
@@ -273,6 +279,7 @@ pub fn run(opts: RunInstallOpts) -> Result<()> {
         common: common_opts,
         podman: crate::run_ephemeral::CommonPodmanOptions {
             rm: true, // Clean up container after installation
+            label: opts.label,
             ..Default::default()
         },
         bind_mounts: Vec::new(),        // No additional bind mounts needed
@@ -320,6 +327,7 @@ mod tests {
         let opts = RunInstallOpts {
             source_image: "test:latest".to_string(),
             target_disk,
+            label: Default::default(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),
                 root_size: None,
@@ -338,6 +346,7 @@ mod tests {
         let opts = RunInstallOpts {
             source_image: "test:latest".to_string(),
             target_disk: "/tmp/test.img".into(),
+            label: Default::default(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),
                 root_size: None,

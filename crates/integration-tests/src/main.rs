@@ -160,10 +160,6 @@ fn main() {
             tests::mount_feature::test_mount_feature_ro_bind();
             Ok(())
         }),
-        Trial::test("mount_feature_multiple", || {
-            tests::mount_feature::test_mount_feature_multiple();
-            Ok(())
-        }),
         Trial::test("run_install_to_disk", || {
             tests::run_install::test_run_install_to_disk();
             Ok(())

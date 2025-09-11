@@ -4,12 +4,14 @@
 //! automatic process cleanup, and SMBIOS credential injection.
 
 use std::fs::File;
-use std::os::fd::AsRawFd as _;
+use std::io::ErrorKind;
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use cap_std_ext::cmdext::CapStdExtCommandExt;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use libc::{VMADDR_CID_ANY, VMADDR_PORT_ANY};
@@ -209,8 +211,8 @@ pub struct QemuConfig {
     pub uefi_vars_path: Option<String>,
     /// SMBIOS credentials for systemd
     pub smbios_credentials: Vec<String>,
-    /// AF_VSOCK guest CID for host-guest communication (None = disabled)
-    pub vsock_guest_cid: Option<u64>,
+    /// VSOCK is enabled by default
+    pub disable_vsock: bool,
 
     /// Write systemd notifications to this file
     pub systemd_notify: Option<File>,
@@ -244,7 +246,7 @@ impl QemuConfig {
             uefi_firmware_path: None,
             uefi_vars_path: None,
             smbios_credentials: vec![],
-            vsock_guest_cid: None,
+            disable_vsock: false,
             systemd_notify: None,
         }
     }
@@ -268,7 +270,7 @@ impl QemuConfig {
             uefi_firmware_path: None,
             uefi_vars_path: None,
             smbios_credentials: vec![],
-            vsock_guest_cid: None,
+            disable_vsock: false,
             systemd_notify: None,
         }
     }
@@ -468,20 +470,10 @@ impl QemuConfig {
         };
         self
     }
-
-    /// Enable AF_VSOCK
-    pub fn enable_vsock(&mut self) -> Result<&mut Self> {
-        // Get a unique guest CID using dynamic allocation
-        let guest_cid = allocate_vsock_cid()?;
-        debug!("Allocated VSOCK CID {} for systemd debugging", guest_cid);
-        self.vsock_guest_cid = Some(guest_cid);
-
-        Ok(self)
-    }
 }
 
 /// Allocate a unique VSOCK CID
-fn allocate_vsock_cid() -> Result<u64> {
+fn allocate_vsock_cid() -> Result<(OwnedFd, u32)> {
     use std::fs::OpenOptions;
     use std::os::unix::io::AsRawFd;
 
@@ -491,35 +483,33 @@ fn allocate_vsock_cid() -> Result<u64> {
         .open("/dev/vhost-vsock")
         .context("Failed to open /dev/vhost-vsock for CID allocation")?;
 
-    for candidate_cid in 3..10001u64 {
+    for candidate_cid in 3..10001u32 {
         // Test if this CID is available
         // VHOST_VSOCK_SET_GUEST_CID = _IOW(VHOST_VIRTIO, 0x60, __u64)
         const VHOST_VSOCK_SET_GUEST_CID: libc::c_ulong = 0x4008af60;
 
         let cid = candidate_cid as u64;
         let result = unsafe {
-            libc::ioctl(
+            match libc::ioctl(
                 vhost_fd.as_raw_fd(),
                 VHOST_VSOCK_SET_GUEST_CID,
                 &cid as *const u64,
-            )
+            ) {
+                0 => Ok(()),
+                _ => Err(std::io::Error::last_os_error()),
+            }
         };
-
-        if result == 0 {
-            // Success! This CID is available
-            debug!("Successfully allocated VSOCK CID: {}", candidate_cid);
-            return Ok(candidate_cid);
-        } else if unsafe { *libc::__errno_location() } == libc::EADDRINUSE {
-            // CID is in use, try next one
-            debug!("VSOCK CID {} is in use, trying next", candidate_cid);
-            continue;
-        } else {
-            // Some other error
-            let errno = unsafe { *libc::__errno_location() };
-            return Err(eyre!(
-                "ioctl VHOST_VSOCK_SET_GUEST_CID failed with errno {}",
-                errno
-            ));
+        match result {
+            Ok(()) => {
+                // Success! This CID is available
+                debug!("Successfully allocated VSOCK CID: {}", candidate_cid);
+                return Ok((vhost_fd.into(), candidate_cid));
+            }
+            Err(e) if e.kind() == ErrorKind::AddrInUse => {
+                debug!("VSOCK CID {} is in use, trying next", candidate_cid);
+                continue;
+            }
+            Err(e) => return Err(e.into()),
         }
     }
 
@@ -528,7 +518,11 @@ fn allocate_vsock_cid() -> Result<u64> {
 
 /// Spawn QEMU VM process with given configuration and optional extra credential.
 /// Uses KVM acceleration, memory-backend-memfd for VirtIO-FS compatibility.
-pub fn spawn(config: &QemuConfig, extra_credentials: &[String]) -> Result<Child> {
+fn spawn(
+    config: &QemuConfig,
+    extra_credentials: &[String],
+    vsock: Option<(OwnedFd, u32)>,
+) -> Result<Child> {
     // Validate configuration first
     config.validate()?;
     let memory_arg = format!("{}M", config.memory_mb);
@@ -739,11 +733,12 @@ pub fn spawn(config: &QemuConfig, extra_credentials: &[String]) -> Result<Child>
     }
 
     // Add AF_VSOCK device if enabled
-    if let Some(guest_cid) = config.vsock_guest_cid {
+    if let Some((vhostfd, guest_cid)) = vsock {
         debug!("Adding AF_VSOCK device with guest CID: {}", guest_cid);
+        cmd.take_fd_n(Arc::new(vhostfd), 42);
         cmd.args([
             "-device",
-            &format!("vhost-vsock-pci,guest-cid={}", guest_cid),
+            &format!("vhost-vsock-pci,guest-cid={},vhostfd=42", guest_cid),
         ]);
     }
 
@@ -790,6 +785,13 @@ pub struct RunningQemu {
 impl RunningQemu {
     /// Spawn QEMU with optional AF_VSOCK debugging enabled
     pub fn spawn(mut config: QemuConfig) -> Result<Self> {
+        let vsockdata = if !config.disable_vsock {
+            // Get a unique guest CID using dynamic allocation
+            Some(allocate_vsock_cid()?)
+        } else {
+            None
+        };
+
         let sd_notification = if let Some(target) = config.systemd_notify.take() {
             let vsock = socket(
                 AddressFamily::Vsock,
@@ -876,7 +878,7 @@ impl RunningQemu {
             .unwrap_or_default();
 
         // Spawn QEMU process with additional VSOCK credential if needed
-        let qemu_process = spawn(&config, &creds)?;
+        let qemu_process = spawn(&config, &creds, vsockdata)?;
 
         Ok(Self {
             qemu_process,

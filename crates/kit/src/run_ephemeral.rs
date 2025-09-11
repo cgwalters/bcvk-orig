@@ -701,13 +701,12 @@ fn inject_systemd_units() -> Result<()> {
 
     debug!("Injecting systemd units from /run/systemd-units");
 
-    let source_units = "/run/systemd-units/system";
-    let target_units = "/run/source-image/etc/systemd/system";
-
-    if !std::path::Path::new(source_units).exists() {
-        debug!("No system/ directory found in systemd-units, skipping unit injection");
+    let source_units = Utf8Path::new("/run/systemd-units/system");
+    if !source_units.exists() {
+        debug!("No systemd units to inject at {}", source_units);
         return Ok(());
     }
+    let target_units = "/run/source-image/etc/systemd/system";
 
     // Create target directories
     fs::create_dir_all(target_units)?;
@@ -892,94 +891,71 @@ pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
         std::path::Path::new("/run/systemd-units").exists()
     );
 
+    let target_unitdir = "/run/source-image/etc/systemd/system";
+
     if std::path::Path::new("/run/host-mounts").exists() {
-        // Check if systemd units directory has pre-provided units (read-only from host)
-        let has_provided_units = std::path::Path::new("/run/systemd-units/system").exists()
-            && fs::read_dir("/run/systemd-units/system")
-                .map(|entries| entries.count() > 0)
-                .unwrap_or(false);
+        for entry in fs::read_dir("/run/host-mounts")? {
+            let entry = entry?;
+            let mount_name = entry.file_name();
+            let mount_name_str = mount_name.to_string_lossy();
+            let source_path = entry.path();
+            let mount_path = format!("/run/host-mounts/{}", mount_name_str);
 
-        if has_provided_units {
-            debug!("Systemd units pre-provided - skipping dynamic mount unit creation");
-        } else {
-            // Use the existing systemd units directory if provided, otherwise create one in /run
-            let service_dir = if std::path::Path::new("/run/systemd-units/system").exists() {
-                "/run/systemd-units/system".to_string()
-            } else {
-                let dir = "/run/systemd-units/system";
-                fs::create_dir_all(dir).context("Failed to create systemd units directory")?;
-                dir.to_string()
+            // Check if this directory is mounted as read-only
+            let is_readonly =
+                !rustix::fs::access(&mount_path, rustix::fs::Access::WRITE_OK).is_ok();
+
+            let mode = if is_readonly { "ro" } else { "rw" };
+            debug!(
+                "Setting up virtiofs mount for {} ({})",
+                mount_name_str, mode
+            );
+
+            // Create virtiofs socket path and tag
+            let socket_path = format!("/run/inner-shared/virtiofs-{}.sock", mount_name_str);
+            let tag = format!("mount_{}", mount_name_str);
+
+            // Spawn virtiofsd for this mount
+            let virtiofsd_config = qemu::VirtiofsConfig {
+                socket_path: socket_path.clone(),
+                shared_dir: source_path.to_string_lossy().to_string(),
+                cache_mode: "always".to_string(),
+                sandbox: "none".to_string(),
+                debug: debug_mode,
             };
-            debug!("Using systemd units directory: {}", service_dir);
+            let virtiofsd_instance = qemu::spawn_virtiofsd(&virtiofsd_config)?;
+            cleanup_guard.add(virtiofsd_instance);
 
-            for entry in fs::read_dir("/run/host-mounts")? {
-                let entry = entry?;
-                let mount_name = entry.file_name();
-                let mount_name_str = mount_name.to_string_lossy();
-                let source_path = entry.path();
-                let mount_path = format!("/run/host-mounts/{}", mount_name_str);
+            // Wait for this virtiofsd socket to be ready
+            qemu::wait_for_virtiofsd_socket(&socket_path, Duration::from_secs(10))?;
 
-                // Check if this directory is mounted as read-only
-                let is_readonly = Command::new("findmnt")
-                    .args(["-n", "-o", "OPTIONS", &mount_path])
-                    .output()
-                    .map(|output| {
-                        let options = String::from_utf8_lossy(&output.stdout);
-                        options.contains("ro")
-                    })
-                    .unwrap_or(false);
+            // Add to QEMU mounts
+            additional_mounts.push(crate::qemu::VirtiofsMount {
+                socket_path: socket_path.clone(),
+                tag: tag.clone(),
+            });
 
-                let mode = if is_readonly { "ro" } else { "rw" };
-                debug!(
-                    "Setting up virtiofs mount for {} ({})",
-                    mount_name_str, mode
-                );
+            // Create individual .mount unit for this virtiofs mount
+            let mount_point = format!("/run/virtiofs-mnt-{}", mount_name_str);
 
-                // Create virtiofs socket path and tag
-                let socket_path = format!("/run/inner-shared/virtiofs-{}.sock", mount_name_str);
-                let tag = format!("mount_{}", mount_name_str);
-
-                // Spawn virtiofsd for this mount
-                let virtiofsd_config = qemu::VirtiofsConfig {
-                    socket_path: socket_path.clone(),
-                    shared_dir: source_path.to_string_lossy().to_string(),
-                    cache_mode: "always".to_string(),
-                    sandbox: "none".to_string(),
-                    debug: debug_mode,
-                };
-                let virtiofsd_instance = qemu::spawn_virtiofsd(&virtiofsd_config)?;
-                cleanup_guard.add(virtiofsd_instance);
-
-                // Wait for this virtiofsd socket to be ready
-                qemu::wait_for_virtiofsd_socket(&socket_path, Duration::from_secs(10))?;
-
-                // Add to QEMU mounts
-                additional_mounts.push(crate::qemu::VirtiofsMount {
-                    socket_path: socket_path.clone(),
-                    tag: tag.clone(),
+            // Use systemd-escape to properly escape the mount path
+            let escaped_path = Command::new("systemd-escape")
+                .args(["-p", &mount_point])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                .unwrap_or_else(|_| {
+                    // Fallback if systemd-escape is not available
+                    mount_point
+                        .replace("/", "-")
+                        .trim_start_matches('-')
+                        .to_string()
                 });
 
-                // Create individual .mount unit for this virtiofs mount
-                let mount_point = format!("/run/virtiofs-mnt-{}", mount_name_str);
+            let mount_unit_name = format!("{}.mount", escaped_path);
+            let mount_options = if is_readonly { "ro" } else { "defaults" };
 
-                // Use systemd-escape to properly escape the mount path
-                let escaped_path = Command::new("systemd-escape")
-                    .args(["-p", &mount_point])
-                    .output()
-                    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    .unwrap_or_else(|_| {
-                        // Fallback if systemd-escape is not available
-                        mount_point
-                            .replace("/", "-")
-                            .trim_start_matches('-')
-                            .to_string()
-                    });
-
-                let mount_unit_name = format!("{}.mount", escaped_path);
-                let mount_options = if is_readonly { "ro" } else { "defaults" };
-
-                let mount_unit_content = format!(
-                    r#"[Unit]
+            let mount_unit_content = format!(
+                r#"[Unit]
 Description=Mount virtiofs {}
 DefaultDependencies=no
 After=systemd-remount-fs.service
@@ -994,41 +970,36 @@ Options={}
 [Install]
 WantedBy=local-fs.target
 "#,
-                    mount_name_str, tag, mount_point, mount_options
-                );
+                mount_name_str, tag, mount_point, mount_options
+            );
 
-                let mount_unit_path = format!("{}/{}", service_dir, mount_unit_name);
-                fs::write(&mount_unit_path, mount_unit_content).with_context(|| {
-                    format!("Failed to write mount unit to {}", mount_unit_path)
-                })?;
+            let mount_unit_path = format!("{target_unitdir}/{mount_unit_name}");
+            fs::write(&mount_unit_path, mount_unit_content)
+                .with_context(|| format!("Failed to write mount unit to {}", mount_unit_path))?;
 
-                // Enable the mount unit by creating symlink in local-fs.target.wants/
-                let wants_dir = format!("{}/local-fs.target.wants", service_dir);
-                fs::create_dir_all(&wants_dir).ok();
-                let wants_link = format!("{}/{}", wants_dir, mount_unit_name);
-                let relative_target = format!("../{}", mount_unit_name);
-                std::os::unix::fs::symlink(&relative_target, &wants_link).ok();
+            // Enable the mount unit by creating symlink in local-fs.target.wants/
+            let wants_dir = format!("{target_unitdir}/local-fs.target.wants");
+            fs::create_dir_all(&wants_dir)?;
+            let wants_link = format!("{}/{}", wants_dir, mount_unit_name);
+            let relative_target = format!("../{}", mount_unit_name);
+            std::os::unix::fs::symlink(&relative_target, &wants_link)?;
 
-                // Create mount point directory in the image
-                let image_mount_point = format!("/run/source-image{}", mount_point);
-                fs::create_dir_all(&image_mount_point).ok();
+            // Create mount point directory in the image
+            let image_mount_point = format!("/run/source-image{}", mount_point);
+            fs::create_dir_all(&image_mount_point).ok();
 
-                debug!(
-                    "Generated mount unit: {} (enabled in local-fs.target)",
-                    mount_unit_name
-                );
-            }
-        } // end else block for has_provided_units check
+            debug!(
+                "Generated mount unit: {} (enabled in local-fs.target)",
+                mount_unit_name
+            );
+        }
     }
 
     match opts.common.execute.as_slice() {
         [] => {}
         elts => {
-            // Create systemd units directory if it doesn't exist
-            if !std::path::Path::new("/run/systemd-units/system").exists() {
-                fs::create_dir_all("/run/systemd-units/system")?;
-                fs::create_dir_all("/run/systemd-units/system/default.target.wants")?;
-            }
+            let wantsdir = format!("{target_unitdir}/default.target.wants");
+            fs::create_dir_all(&wantsdir)?;
 
             let mut service_content = format!(
                 r#"[Unit]
@@ -1060,17 +1031,13 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 "#
             );
 
-            let service_path = "/run/systemd-units/system/bootc-execute.service";
+            let service_path = format!("{target_unitdir}/bootc-execute.service");
             fs::write(service_path, service_content)?;
-            let service_path = "/run/systemd-units/system/bootc-execute-finish.service";
+            let service_path = format!("{target_unitdir}/bootc-execute-finish.service");
             fs::write(service_path, service_finish)?;
 
-            // Create wants directory and symlink to enable the service
-            let wants_dir = "/run/systemd-units/system/default.target.wants";
-            std::fs::create_dir_all(wants_dir)?;
-
             for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
-                let wants_link = format!("/run/systemd-units/system/default.target.wants/{svc}");
+                let wants_link = format!("{wantsdir}/{svc}");
                 debug!("Creating execute service symlink: {}", &wants_link);
                 std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
             }
@@ -1079,9 +1046,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
     // Copy systemd units if provided (after mount units have been generated)
     // Also inject if we created mount units that need to be copied
-    if std::path::Path::new("/run/systemd-units").exists() {
-        inject_systemd_units()?;
-    }
+    inject_systemd_units()?;
 
     // Start virtiofsd in background using the source image directly
     // If we have host mounts, we'll need QEMU to mount them separately
@@ -1196,16 +1161,6 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         // Add virtio-blk devices
         for blk_device in virtio_blk_devices {
             qemu_config.add_virtio_blk_device(blk_device.disk_file, blk_device.serial);
-        }
-
-        // Enable AF_VSOCK systemd debugging for better boot analysis
-        debug!("Enabling AF_VSOCK systemd debugging for ephemeral VM");
-        if let Err(e) = qemu_config.enable_vsock() {
-            // Don't fail the entire operation if vsock debugging fails
-            debug!(
-                "Failed to enable vsock debugging (continuing anyway): {}",
-                e
-            );
         }
 
         let log_path = Path::new("/run/systemd-guest.txt");

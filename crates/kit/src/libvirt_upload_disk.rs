@@ -260,6 +260,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
         target_disk: temp_disk.clone(),
         install: opts.install.clone(),
         disk_size: Some(disk_size),
+        label: Default::default(),
         common: crate::run_ephemeral::CommonVmOpts {
             memory: Some(opts.memory.clone()),
             vcpus: opts.vcpus,

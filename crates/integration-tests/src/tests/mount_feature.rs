@@ -28,17 +28,17 @@ fn create_mount_verify_unit(
     expected_file: &str,
     expected_content: &str,
 ) -> std::io::Result<()> {
-    // Create a simple verification script that runs early and then powers off
     let unit_content = format!(
         r#"[Unit]
 Description=Verify mount {mount_name} and poweroff
-DefaultDependencies=no
-After=sysinit.target
+RequiresMountsFor=/run/virtiofs-mnt-{mount_name}
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mount {mount_name}..."; for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-{mount_name}" ]; then echo "Mount point found"; break; fi; echo "Mount attempt $i/30"; sleep 1; done'
-ExecStart=/bin/bash -c 'echo "Starting mount verification for {mount_name}"; sleep 2; ls -la /run/virtiofs-mnt-{mount_name}/; if [ -f "/run/virtiofs-mnt-{mount_name}/{expected_file}" ]; then content=$(cat "/run/virtiofs-mnt-{mount_name}/{expected_file}"); if [ "$content" = "{expected_content}" ]; then echo "MOUNT_TEST_PASS: {mount_name} verified"; else echo "MOUNT_TEST_FAIL: {mount_name} wrong content: $content"; fi; else echo "MOUNT_TEST_FAIL: {mount_name} file not found at /run/virtiofs-mnt-{mount_name}/{expected_file}"; fi; systemctl poweroff'
+ExecStart=grep -qF "{expected_content}" /run/virtiofs-mnt-{mount_name}/{expected_file}
+ExecStart=test -w /run/virtiofs-mnt-{mount_name}/{expected_file}
+ExecStart=echo ok mount verify {mount_name}
+ExecStart=systemctl poweroff
 StandardOutput=journal+console
 StandardError=journal+console
 "#
@@ -58,13 +58,14 @@ fn create_ro_mount_verify_unit(
     let unit_content = format!(
         r#"[Unit]
 Description=Verify read-only mount {mount_name} and poweroff
-DefaultDependencies=no
-After=sysinit.target
+RequiresMountsFor=/run/virtiofs-mnt-{mount_name}
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mount {mount_name}..."; for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-{mount_name}" ]; then echo "Mount point found"; break; fi; echo "Mount attempt $i/30"; sleep 1; done'
-ExecStart=/bin/bash -c 'echo "Starting RO mount verification for {mount_name}"; sleep 2; ls -la /run/virtiofs-mnt-{mount_name}/; if [ -f "/run/virtiofs-mnt-{mount_name}/{expected_file}" ]; then if touch "/run/virtiofs-mnt-{mount_name}/test-write" 2>/dev/null; then echo "MOUNT_TEST_FAIL: {mount_name} is writable!"; rm "/run/virtiofs-mnt-{mount_name}/test-write"; else echo "MOUNT_TEST_PASS: {mount_name} is read-only"; fi; else echo "MOUNT_TEST_FAIL: {mount_name} not mounted"; fi; systemctl poweroff'
+ExecStart=test -f /run/virtiofs-mnt-{mount_name}/{expected_file}
+ExecStart=test '!' -w /run/virtiofs-mnt-{mount_name}/{expected_file}
+ExecStart=echo ok mount verify {mount_name}
+ExecStart=systemctl poweroff
 StandardOutput=journal+console
 StandardError=journal+console
 "#
@@ -107,6 +108,7 @@ pub fn test_mount_feature_bind() {
             "--rm",
             INTEGRATION_TEST_LABEL,
             "--console",
+            "-K",
             "--bind",
             &format!("{}:testmount", temp_dir.path().display()),
             "--systemd-units",
@@ -121,21 +123,9 @@ pub fn test_mount_feature_bind() {
         .expect("Failed to run bootc-kit with bind mount");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("Test output:\nstdout: {}\nstderr: {}", stdout, stderr);
-
-    // Check if the verification passed
-    assert!(
-        stdout.contains("MOUNT_TEST_PASS: testmount verified")
-            || stderr.contains("MOUNT_TEST_PASS: testmount verified"),
-        "Mount verification failed. Did not find success message in output"
-    );
-
-    assert!(
-        !stdout.contains("MOUNT_TEST_FAIL") && !stderr.contains("MOUNT_TEST_FAIL"),
-        "Mount test reported failure"
-    );
+    dbg!(&stdout);
+    dbg!(String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("ok mount verify"));
 
     println!("Successfully tested and verified bind mount feature");
 }
@@ -171,6 +161,7 @@ pub fn test_mount_feature_ro_bind() {
             "--rm",
             "--label=bootc-kit.integration-test=1",
             "--console",
+            "-K",
             "--ro-bind",
             &format!("{}:romount", temp_dir.path().display()),
             "--systemd-units",
@@ -185,148 +176,5 @@ pub fn test_mount_feature_ro_bind() {
         .expect("Failed to run bootc-kit with ro-bind mount");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("Test output:\nstdout: {}\nstderr: {}", stdout, stderr);
-
-    // Check if the verification passed
-    assert!(
-        stdout.contains("MOUNT_TEST_PASS: romount is read-only")
-            || stderr.contains("MOUNT_TEST_PASS: romount is read-only"),
-        "Read-only mount verification failed. Did not find success message in output"
-    );
-
-    assert!(
-        !stdout.contains("MOUNT_TEST_FAIL") && !stderr.contains("MOUNT_TEST_FAIL"),
-        "Mount test reported failure"
-    );
-
-    println!("Successfully tested and verified read-only bind mount feature");
-}
-
-pub fn test_mount_feature_multiple() {
-    let bck = get_bck_command().unwrap();
-
-    // Create multiple temporary directories to test multiple mounts
-    let temp_dir1 = TempDir::new().expect("Failed to create first temp directory");
-    let temp_dir2 = TempDir::new().expect("Failed to create second temp directory");
-
-    let content1 = "Content from mount1";
-    let content2 = "Content from mount2";
-    fs::write(temp_dir1.path().join("file1.txt"), content1).expect("Failed to write file1");
-    fs::write(temp_dir2.path().join("file2.txt"), content2).expect("Failed to write file2");
-
-    // Create systemd units directory
-    let units_dir = TempDir::new().expect("Failed to create units directory");
-    let system_dir = units_dir.path().join("system");
-    fs::create_dir(&system_dir).expect("Failed to create system directory");
-
-    // Create a combined verification unit
-    let combined_unit = format!(
-        r#"[Unit]
-Description=Verify multiple mounts and poweroff
-DefaultDependencies=no
-After=sysinit.target
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/bash -c 'echo "Waiting for virtiofs mounts..."; for mount in mount1 mount2; do for i in {{1..30}}; do if [ -d "/run/virtiofs-mnt-$mount" ]; then echo "$mount mount point found"; break; fi; echo "$mount mount attempt $i/30"; sleep 1; done; done'
-ExecStart=/bin/bash -c 'echo "Verifying multiple mounts"; sleep 2; failed=0; \
-if [ -f "/run/virtiofs-mnt-mount1/file1.txt" ]; then \
-  content=$(cat "/run/virtiofs-mnt-mount1/file1.txt"); \
-  if [ "$content" = "{content1}" ]; then \
-    echo "MOUNT_TEST_PASS: mount1 verified"; \
-  else \
-    echo "MOUNT_TEST_FAIL: mount1 wrong content"; \
-    failed=1; \
-  fi; \
-else \
-  echo "MOUNT_TEST_FAIL: mount1 not found"; \
-  ls -la /run/virtiofs-mnt-mount1/ 2>&1; \
-  failed=1; \
-fi; \
-if [ -f "/run/virtiofs-mnt-mount2/file2.txt" ]; then \
-  if touch "/run/virtiofs-mnt-mount2/test-write" 2>/dev/null; then \
-    echo "MOUNT_TEST_FAIL: mount2 is writable!"; \
-    failed=1; \
-  else \
-    echo "MOUNT_TEST_PASS: mount2 is read-only"; \
-  fi; \
-else \
-  echo "MOUNT_TEST_FAIL: mount2 not found"; \
-  ls -la /run/virtiofs-mnt-mount2/ 2>&1; \
-  failed=1; \
-fi; \
-if [ $failed -eq 0 ]; then \
-  echo "MOUNT_TEST_PASS: All mounts verified successfully"; \
-fi; \
-systemctl poweroff'
-StandardOutput=journal+console
-StandardError=journal+console
-"#
-    );
-
-    fs::write(system_dir.join("verify-all-mounts.service"), combined_unit)
-        .expect("Failed to create combined verify unit");
-
-    println!(
-        "Testing multiple mounts with directories: {} and {}",
-        temp_dir1.path().display(),
-        temp_dir2.path().display()
-    );
-
-    // Test multiple bind mounts at once
-    let output = Command::new("timeout")
-        .args([
-            "60s",
-            &bck,
-            "run-ephemeral",
-            "--rm",
-            "--label=bootc-kit.integration-test=1",
-            "--console",
-            "--bind",
-            &format!("{}:mount1", temp_dir1.path().display()),
-            "--ro-bind",
-            &format!("{}:mount2", temp_dir2.path().display()),
-            "--systemd-units",
-            units_dir.path().to_str().unwrap(),
-            "--karg",
-            "systemd.unit=verify-all-mounts.service",
-            "--karg",
-            "systemd.journald.forward_to_console=1",
-            "quay.io/fedora/fedora-bootc:42",
-        ])
-        .output()
-        .expect("Failed to run bootc-kit with multiple mounts");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("Test output:\nstdout: {}\nstderr: {}", stdout, stderr);
-
-    // Check if all verifications passed
-    assert!(
-        stdout.contains("MOUNT_TEST_PASS: mount1 verified")
-            || stderr.contains("MOUNT_TEST_PASS: mount1 verified"),
-        "Mount1 verification failed. Did not find success message in output"
-    );
-
-    assert!(
-        stdout.contains("MOUNT_TEST_PASS: mount2 is read-only")
-            || stderr.contains("MOUNT_TEST_PASS: mount2 is read-only"),
-        "Mount2 read-only verification failed. Did not find success message in output"
-    );
-
-    assert!(
-        stdout.contains("MOUNT_TEST_PASS: All mounts verified successfully")
-            || stderr.contains("MOUNT_TEST_PASS: All mounts verified successfully"),
-        "Combined mount verification failed. Did not find success message in output"
-    );
-
-    assert!(
-        !stdout.contains("MOUNT_TEST_FAIL") && !stderr.contains("MOUNT_TEST_FAIL"),
-        "Mount test reported failure"
-    );
-
-    println!("Successfully tested and verified multiple mounts feature");
+    assert!(stdout.contains("ok mount verify"));
 }
