@@ -34,10 +34,6 @@ BWRAP_ARGS=(
     --bind /run/inner-shared /run/inner-shared
 )
 
-runbwrap() {
-    bwrap "${BWRAP_ARGS[@]}" "$@"
-}
-
 # Initialize environment
 init_tmproot
 
@@ -48,4 +44,4 @@ if [[ $# -eq 0 ]]; then
 fi
 
 # Execute with proper environment passing
-runbwrap --bind /run /run -- ${SELFEXE} container-entrypoint "$@"
+exec bwrap "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@"

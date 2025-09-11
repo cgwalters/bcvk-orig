@@ -144,14 +144,6 @@ fn main() {
             tests::run_ephemeral::test_run_ephemeral_execute();
             Ok(())
         }),
-        Trial::test("run_ephemeral_ssh_key_generation", || {
-            tests::run_ephemeral::test_run_ephemeral_ssh_key_generation();
-            Ok(())
-        }),
-        Trial::test("run_ephemeral_ssh_credential_injection", || {
-            tests::run_ephemeral::test_run_ephemeral_ssh_credential_injection();
-            Ok(())
-        }),
         Trial::test("run_ephemeral_container_ssh_access", || {
             tests::run_ephemeral::test_run_ephemeral_container_ssh_access();
             Ok(())

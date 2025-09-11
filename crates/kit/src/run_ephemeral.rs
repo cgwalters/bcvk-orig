@@ -26,6 +26,8 @@ pub const DEFAULT_MEMORY_STR: &str = "2048";
 /// Default memory size as string for user-facing defaults (in GB)
 pub const DEFAULT_MEMORY_USER_STR: &str = "2G";
 
+const ENTRYPOINT: &str = "/var/lib/bcvk/entrypoint";
+
 /// Get default vCPU count (number of available processors, or 2 as fallback)
 pub fn default_vcpus() -> u32 {
     std::thread::available_parallelism()
@@ -329,7 +331,7 @@ pub fn run_qemu_in_container(
         "-v",
         "/usr:/run/hostusr:ro", // Bind mount host /usr as read-only
         "-v",
-        &format!("{entrypoint_path}:/run/entrypoint"),
+        &format!("{entrypoint_path}:{ENTRYPOINT}"),
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
         // And bind mount in the pristine image (without any mounts on top)
@@ -427,7 +429,7 @@ pub fn run_qemu_in_container(
         cmd.args(["-e", &format!("BOOTC_DISK_FILES={}", disk_specs)]);
     }
 
-    cmd.args([&opts.image, "/run/entrypoint"]);
+    cmd.args([&opts.image, ENTRYPOINT]);
     cmd.args(entrypoint_cmd);
 
     // Log the full command line if requested

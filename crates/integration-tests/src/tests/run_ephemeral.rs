@@ -16,6 +16,8 @@
 
 use std::process::Command;
 
+use tracing::debug;
+
 use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
 
 pub fn get_container_kernel_version(image: &str) -> String {
@@ -223,130 +225,6 @@ pub fn test_run_ephemeral_execute() {
     eprintln!("Execute test passed: script output captured successfully");
 }
 
-pub fn test_run_ephemeral_ssh_key_generation() {
-    const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
-    let bck = get_bck_command().unwrap();
-
-    eprintln!("Testing SSH key generation with run-ephemeral");
-
-    // Start VM with SSH key generation in detached mode
-    let output = Command::new(&bck)
-        .args([
-            "run-ephemeral",
-            "--ssh-keygen",
-            INTEGRATION_TEST_LABEL,
-            "--detach",
-            "--rm",
-            IMAGE,
-            "--karg",
-            "systemd.unit=poweroff.target",
-        ])
-        .output()
-        .expect("Failed to run ephemeral VM with SSH");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("Failed to start VM with SSH: {}", stderr);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!(
-        "SSH keygen test output:\nstdout: {}\nstderr: {}",
-        stdout,
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Check that SSH key was generated (look for cache directory)
-    let cache_dir = dirs::cache_dir()
-        .expect("Could not determine cache directory")
-        .join("bootc-kit");
-
-    if cache_dir.exists() {
-        eprintln!("SSH cache directory found at: {:?}", cache_dir);
-
-        // List the contents
-        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    eprintln!("Cache entry: {:?}", entry.path());
-
-                    // Check for SSH key files
-                    let ssh_key = entry.path().join("ssh_key");
-                    let ssh_key_pub = entry.path().join("ssh_key.pub");
-
-                    if ssh_key.exists() && ssh_key_pub.exists() {
-                        eprintln!("Found SSH key files: {:?} and {:?}", ssh_key, ssh_key_pub);
-
-                        // Verify key permissions
-                        let metadata =
-                            std::fs::metadata(&ssh_key).expect("Failed to get key metadata");
-                        let permissions = metadata.permissions();
-                        use std::os::unix::fs::PermissionsExt;
-                        assert_eq!(
-                            permissions.mode() & 0o777,
-                            0o600,
-                            "SSH private key should have 600 permissions"
-                        );
-
-                        eprintln!("SSH key generation test passed");
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    eprintln!("SSH key generation test completed (may not have persisted due to --rm)");
-}
-
-pub fn test_run_ephemeral_ssh_credential_injection() {
-    const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
-    let bck = get_bck_command().unwrap();
-
-    eprintln!("Testing SSH credential injection via SMBIOS");
-
-    // Start VM with SSH and execute a command to check for SSH setup
-    let output = Command::new("timeout")
-        .args([
-            "180s",
-            &bck,
-            "run-ephemeral",
-            "--ssh-keygen",
-            INTEGRATION_TEST_LABEL,
-            "--rm",
-            IMAGE,
-            "--execute",
-            "test -d /root/.ssh && echo 'SSH_DIR_EXISTS' || echo 'SSH_DIR_MISSING'; ls -la /root/.ssh/ 2>/dev/null || echo 'SSH_LS_FAILED'"
-        ])
-        .output()
-        .expect("Failed to run ephemeral VM with SSH credential test");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    eprintln!(
-        "SSH credential test output:\nstdout: {}\nstderr: {}",
-        stdout, stderr
-    );
-
-    if !output.status.success() {
-        eprintln!(
-            "SSH credential injection test failed with status: {:?}",
-            output.status.code()
-        );
-        eprintln!("This may be expected if VM shutdown before SSH setup completed");
-    } else {
-        // Check if SSH directory was created via credentials
-        if stdout.contains("SSH_DIR_EXISTS") {
-            eprintln!("SSH credential injection test passed: SSH directory created");
-        } else {
-            eprintln!(
-                "SSH credential injection test: SSH directory not found (may be timing issue)"
-            );
-        }
-    }
-}
-
 pub fn test_run_ephemeral_container_ssh_access() {
     use std::thread;
     use std::time::Duration;
@@ -415,13 +293,8 @@ pub fn test_run_ephemeral_container_ssh_access() {
         .expect("Failed to run SSH command");
 
     let ssh_stdout = String::from_utf8_lossy(&ssh_output.stdout);
-    let ssh_stderr = String::from_utf8_lossy(&ssh_output.stderr);
 
-    eprintln!(
-        "SSH test output:\nstdout: {}\nstderr: {}",
-        ssh_stdout, ssh_stderr
-    );
-    eprintln!("SSH exit status: {:?}", ssh_output.status.code());
+    debug!("SSH exit status: {:?}", ssh_output.status.code());
 
     // Cleanup: stop the container
     let cleanup_output = Command::new("podman")
@@ -436,12 +309,8 @@ pub fn test_run_ephemeral_container_ssh_access() {
     }
 
     // Check if SSH worked
-    if ssh_output.status.success() && ssh_stdout.contains("SSH_TEST_SUCCESS") {
-        eprintln!("Container SSH access test passed!");
-    } else {
-        eprintln!("Container SSH access test failed or timed out");
-        eprintln!("This may be expected due to VM boot time or SSH service startup");
-    }
+    assert!(ssh_output.status.success());
+    assert!(ssh_stdout.contains("SSH_TEST_SUCCESS"));
 }
 
 pub fn test_run_ephemeral_vsock_systemd_debugging() {
