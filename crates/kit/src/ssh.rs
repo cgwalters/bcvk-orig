@@ -1,4 +1,4 @@
-//! SSH integration for bootc-kit VMs
+//! SSH integration for bcvk VMs
 
 use camino::Utf8Path;
 use color_eyre::{eyre::eyre, Result};
@@ -78,7 +78,7 @@ pub fn generate_default_keypair() -> Result<SshKeyPair> {
 /// Connect to VM via container-based SSH access
 ///
 /// Establishes an SSH connection to a VM by executing SSH commands inside the
-/// container that hosts the VM. This is the primary connection method for bootc-kit
+/// container that hosts the VM. This is the primary connection method for bcvk
 /// VMs and provides isolated, secure access without requiring direct host network
 /// configuration.
 ///

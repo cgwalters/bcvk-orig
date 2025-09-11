@@ -98,7 +98,7 @@ impl BootcVolume {
             }
 
             if let Some(ref version) = self.bootc_kit_version {
-                output.push_str(&format!("\n  bootc-kit Version: {}", version));
+                output.push_str(&format!("\n  bcvk Version: {}", version));
             }
         }
 
@@ -227,9 +227,9 @@ impl LibvirtListOpts {
 
             // First try to extract metadata from description field (new format)
             if let Some(description) = extract_xml_value(&xml, "description") {
-                if description.starts_with("bootc-kit volume: ") {
+                if description.starts_with("bcvk volume: ") {
                     // Parse JSON metadata from description
-                    let json_str = description.strip_prefix("bootc-kit volume: ").unwrap_or("");
+                    let json_str = description.strip_prefix("bcvk volume: ").unwrap_or("");
                     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(json_str) {
                         source_image = metadata
                             .get("source_image")
@@ -261,7 +261,7 @@ impl LibvirtListOpts {
                 source_digest = extract_xml_value(&xml, "bootc:source-digest");
                 filesystem = extract_xml_value(&xml, "bootc:filesystem");
                 created = extract_xml_value(&xml, "bootc:created");
-                bootc_kit_version = extract_xml_value(&xml, "bootc:bootc-kit-version");
+                bootc_kit_version = extract_xml_value(&xml, "bootc:bcvk-version");
             }
         }
 

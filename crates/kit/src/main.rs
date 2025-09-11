@@ -27,7 +27,7 @@ pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
 
 /// A comprehensive toolkit for developing and testing bootc containers.
 ///
-/// bootc-kit provides a complete workflow for building, testing, and managing
+/// bcvk provides a complete workflow for building, testing, and managing
 /// bootc containers using ephemeral VMs. Run bootc images as temporary VMs,
 /// install them to disk, or manage existing installations - all without
 /// requiring root privileges.
@@ -87,7 +87,7 @@ struct SshOpts {
     args: Vec<String>,
 }
 
-/// Available bootc-kit commands for container and VM management.
+/// Available bcvk commands for container and VM management.
 #[derive(Subcommand)]
 enum Commands {
     /// Execute commands on the host system from within containers
@@ -177,10 +177,10 @@ fn install_tracing() {
         .init();
 }
 
-/// Main entry point for the bootc-kit CLI application.
+/// Main entry point for the bcvk CLI application.
 ///
 /// Initializes logging, error handling, and command dispatch for all
-/// bootc-kit operations including VM management, SSH access, and
+/// bcvk operations including VM management, SSH access, and
 /// container image handling.
 fn main() -> Result<(), Report> {
     install_tracing();

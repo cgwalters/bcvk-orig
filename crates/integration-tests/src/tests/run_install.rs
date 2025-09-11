@@ -43,7 +43,7 @@ pub fn test_run_install_to_disk() {
             disk_path.to_str().unwrap(),
         ])
         .output()
-        .expect("Failed to run bootc-kit run-install");
+        .expect("Failed to run bcvk run-install");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -1,6 +1,6 @@
-# Integration Tests for bootc-kit
+# Integration Tests for bcvk
 
-This crate contains comprehensive integration tests for bootc-kit functionality.
+This crate contains comprehensive integration tests for bcvk functionality.
 
 ## Test Structure
 
@@ -32,10 +32,10 @@ Tests can use either the installed `bck` binary or the development binary:
 
 ```bash
 # Use specific binary path
-export BCK_PATH="/path/to/bootc-kit"
+export BCVK_PATH="/path/to/bcvk"
 
 # Or let tests auto-detect development binary
-# (tests will use target/debug/bootc-kit if available, falling back to 'bck')
+# (tests will use target/debug/bcvk if available, falling back to 'bck')
 ```
 
 ## Bootc Install Workflow Tests
@@ -60,7 +60,7 @@ These tests validate prerequisite components:
 The tests demonstrate the intended bootc installation workflow:
 
 ```bash
-bootc-kit run-ephemeral \
+bcvk run-ephemeral \
   --mount-disk-file /path/to/disk.img:output \
   --bind-storage-ro \
   --execute "bootc install to-disk --source-imgref <image> /dev/disk/by-id/virtio-output" \
@@ -131,7 +131,7 @@ Tests use these bootc-enabled container images:
 Enable verbose logging for troubleshooting:
 
 ```bash
-# Debug bootc-kit operations
+# Debug bcvk operations
 RUST_LOG=debug cargo run --bin integration-tests <test_name>
 
 # Debug with backtraces

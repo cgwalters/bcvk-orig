@@ -1,6 +1,6 @@
 //! Install bootc images to disk using ephemeral VMs
 //!
-//! This module provides the core installation functionality for bootc-kit, enabling
+//! This module provides the core installation functionality for bcvk, enabling
 //! automated installation of bootc container images to disk images through an
 //! ephemeral VM-based approach.
 //!
@@ -66,10 +66,10 @@
 //!
 //! ```bash
 //! # Basic installation with defaults
-//! bootc-kit run-install quay.io/centos-bootc/centos-bootc:stream10 output.img
+//! bcvk run-install quay.io/centos-bootc/centos-bootc:stream10 output.img
 //!
 //! # Custom filesystem and size
-//! bootc-kit run-install --filesystem xfs --root-size 20G \
+//! bcvk run-install --filesystem xfs --root-size 20G \
 //!     quay.io/centos-bootc/centos-bootc:stream10 output.img
 //! ```
 

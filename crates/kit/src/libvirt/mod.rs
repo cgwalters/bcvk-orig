@@ -1,4 +1,4 @@
-//! libvirt integration for bootc-kit
+//! libvirt integration for bcvk
 //!
 //! This module provides a comprehensive libvirt integration with subcommands for:
 //! - `upload`: Upload bootc disk images to libvirt with metadata annotations

@@ -1,5 +1,5 @@
 [package]
-name = "bootc-kit"
+name = "bcvk"
 version = "0.1.0"
 edition = "2021"
 publish = false

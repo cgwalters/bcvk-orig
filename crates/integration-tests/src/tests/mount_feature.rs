@@ -120,7 +120,7 @@ pub fn test_mount_feature_bind() {
             "quay.io/fedora/fedora-bootc:42",
         ])
         .output()
-        .expect("Failed to run bootc-kit with bind mount");
+        .expect("Failed to run bcvk with bind mount");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     dbg!(&stdout);
@@ -159,7 +159,7 @@ pub fn test_mount_feature_ro_bind() {
             &bck,
             "run-ephemeral",
             "--rm",
-            "--label=bootc-kit.integration-test=1",
+            "--label=bcvk.integration-test=1",
             "--console",
             "-K",
             "--ro-bind",
@@ -173,7 +173,7 @@ pub fn test_mount_feature_ro_bind() {
             "quay.io/fedora/fedora-bootc:42",
         ])
         .output()
-        .expect("Failed to run bootc-kit with ro-bind mount");
+        .expect("Failed to run bcvk with ro-bind mount");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("ok mount verify"));

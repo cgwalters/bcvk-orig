@@ -1,4 +1,4 @@
-# A toolkit for virtualization and bootc
+# bcvk - bootc virtualization kit
 
 This project helps launch ephemeral VMs from bootc containers, and also create
 disk images that can be imported into other virtualization frameworks.
@@ -17,23 +17,23 @@ in the host environment.
 
 ```bash
 # VM with custom resources
-bootc-kit run-ephemeral -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
-bootc-kit ssh mytestvm
+bcvk run-ephemeral -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
+bcvk ssh mytestvm
 ```
 
 ### Creating a persistent bootable disk image from a container image
 ```bash
 # Install bootc image to disk
-bootc-kit run-install quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
+bcvk run-install quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
 ```
 
 ### Image management
 ```bash
 # List bootc images
-bootc-kit images list
+bcvk images list
 
 # List as JSON
-bootc-kit images list --json
+bcvk images list --json
 ```
 
 ## Command Comparison

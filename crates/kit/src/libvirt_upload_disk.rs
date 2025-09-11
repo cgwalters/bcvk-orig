@@ -160,7 +160,7 @@ impl LibvirtUploadDiskOpts {
     <bootc:source-image>{}</bootc:source-image>
     <bootc:filesystem>{}</bootc:filesystem>
     <bootc:created>{}</bootc:created>
-    <bootc:bootc-kit-version>1.0.0</bootc:bootc-kit-version>
+    <bootc:bcvk-version>1.0.0</bootc:bcvk-version>
   </bootc:container>
 </metadata>"#,
             self.source_image,
@@ -202,7 +202,7 @@ impl LibvirtUploadDiskOpts {
       <bootc:source-image>{}</bootc:source-image>
       <bootc:filesystem>{}</bootc:filesystem>
       <bootc:created>{}</bootc:created>
-      <bootc:bootc-kit-version>1.0.0</bootc:bootc-kit-version>
+      <bootc:bcvk-version>1.0.0</bootc:bcvk-version>
     </bootc:container>
   </metadata>
 </volume>"#,

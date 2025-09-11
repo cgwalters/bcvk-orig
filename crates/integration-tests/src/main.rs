@@ -7,7 +7,7 @@ use serde_json::Value;
 use xshell::{cmd, Shell};
 
 /// Label used to identify containers created by integration tests
-pub(crate) const INTEGRATION_TEST_LABEL: &str = "--label=bootc-kit.integration-test=1";
+pub(crate) const INTEGRATION_TEST_LABEL: &str = "--label=bcvk.integration-test=1";
 
 /// Cleanup all containers with the integration test label
 pub(crate) fn cleanup_integration_test_containers() {
@@ -19,7 +19,7 @@ pub(crate) fn cleanup_integration_test_containers() {
             "ps",
             "-a",
             "--filter",
-            "label=bootc-kit.integration-test=1",
+            "label=bcvk.integration-test=1",
             "-q",
         ])
         .output();
@@ -57,9 +57,9 @@ mod tests {
     pub mod run_install;
 }
 
-/// Get the path to the bck binary, checking BCK_PATH env var first, then falling back to "bck"
+/// Get the path to the bck binary, checking BCVK_PATH env var first, then falling back to "bck"
 pub(crate) fn get_bck_command() -> Result<String> {
-    if let Some(path) = std::env::var("BCK_PATH").ok() {
+    if let Some(path) = std::env::var("BCVK_PATH").ok() {
         return Ok(path);
     }
     // Force the user to set this if we're running from the project dir
@@ -68,7 +68,7 @@ pub(crate) fn get_bck_command() -> Result<String> {
         .find(|p| Path::new(p).exists())
     {
         return Err(eyre!(
-            "Detected {path} - set BCK_PATH={path} to run using this binary"
+            "Detected {path} - set BCVK_PATH={path} to run using this binary"
         ));
     }
     return Ok("bck".to_owned());

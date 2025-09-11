@@ -1,4 +1,4 @@
-//! Common installation options shared across bootc-kit commands
+//! Common installation options shared across bcvk commands
 //!
 //! This module provides shared configuration structures for disk installation
 //! operations, ensuring consistency across run-install, libvirt-upload-disk,

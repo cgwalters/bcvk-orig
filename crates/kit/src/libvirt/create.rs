@@ -415,7 +415,7 @@ impl LibvirtCreateOpts {
         }
 
         info!("  Serial Console: virsh console {}", domain_name);
-        info!("  SSH Access: bootc-kit libvirt ssh {}", domain_name);
+        info!("  SSH Access: bcvk libvirt ssh {}", domain_name);
 
         Ok(())
     }

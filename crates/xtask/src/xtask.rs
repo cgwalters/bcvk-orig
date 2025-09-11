@@ -60,7 +60,7 @@ fn main() -> Result<(), Report> {
 }
 
 fn build(sh: &Shell) -> Result<()> {
-    cmd!(sh, "cargo build -p bootc-kit --release").run()?;
+    cmd!(sh, "cargo build -p bcvk --release").run()?;
     cfg_if::cfg_if! {
         if #[cfg(target_os = "linux")] {
             // Nothing, we can just use systemd-run

@@ -67,7 +67,7 @@ pub fn test_run_ephemeral_correct_kernel() {
             "systemd.unit=poweroff.target",
         ])
         .output()
-        .expect("Failed to run bootc-kit run-ephemeral");
+        .expect("Failed to run bcvk run-ephemeral");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -104,7 +104,7 @@ pub fn test_run_ephemeral_poweroff() {
             "systemd.unit=poweroff.target",
         ])
         .output()
-        .expect("Failed to run bootc-kit run-ephemeral");
+        .expect("Failed to run bcvk run-ephemeral");
 
     // Check that the command completed successfully
     assert!(
@@ -132,7 +132,7 @@ pub fn test_run_ephemeral_with_memory_limit() {
             "quay.io/fedora/fedora-bootc:42",
         ])
         .output()
-        .expect("Failed to run bootc-kit run-ephemeral");
+        .expect("Failed to run bcvk run-ephemeral");
 
     assert!(
         output.status.success(),
@@ -159,7 +159,7 @@ pub fn test_run_ephemeral_with_vcpus() {
             "quay.io/fedora/fedora-bootc:42",
         ])
         .output()
-        .expect("Failed to run bootc-kit run-ephemeral");
+        .expect("Failed to run bcvk run-ephemeral");
 
     assert!(
         output.status.success(),
@@ -187,7 +187,7 @@ pub fn test_run_ephemeral_execute() {
             "quay.io/fedora/fedora-bootc:42",
         ])
         .output()
-        .expect("Failed to run bootc-kit run-ephemeral with --execute");
+        .expect("Failed to run bcvk run-ephemeral with --execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

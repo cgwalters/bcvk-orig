@@ -2,7 +2,7 @@ all:
 	cargo xtask build
 
 install:
-	install -D -m 0755 target/release/bootc-kit $(DESTDIR)/usr/bin/bootc-kit
+	install -D -m 0755 target/release/bcvk $(DESTDIR)/usr/bin/bcvk
 
 makesudoinstall:
 	make

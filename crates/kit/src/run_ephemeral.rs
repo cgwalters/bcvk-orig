@@ -13,7 +13,7 @@
 //! ## Execution Flow
 //!
 //! The execution follows this chain:
-//! 1. **Host Process**: `bootc-kit run-ephemeral` invoked on host
+//! 1. **Host Process**: `bcvk run-ephemeral` invoked on host
 //! 2. **Container Launch**: Podman privileged container with KVM and host mounts
 //! 3. **Namespace Setup**: bwrap creates isolated namespace with hybrid rootfs  
 //! 4. **Binary Re-execution**: Same binary re-executes with `container-entrypoint`
@@ -25,7 +25,7 @@
 //! - Runs on the host system
 //! - Serializes CLI options to JSON via `BCK_CONFIG` environment variable
 //! - Mounts critical resources into container:
-//!   - `/run/selfexe`: The bootc-kit binary itself (for re-execution)
+//!   - `/run/selfexe`: The bcvk binary itself (for re-execution)
 //!   - `/run/source-image`: Target container image via `--mount=type=image`
 //!   - `/run/hostusr`: Host `/usr` directory (read-only, for QEMU/tools)
 //!   - `/var/lib/bcvk/entrypoint`: Embedded entrypoint.sh script
