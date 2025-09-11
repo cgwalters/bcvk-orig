@@ -4,6 +4,7 @@ use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
 
+mod cli_json;
 mod container_entrypoint;
 pub(crate) mod containerenv;
 mod envdetect;
@@ -65,6 +66,19 @@ struct DebugInternalsOpts {
 #[derive(Subcommand)]
 enum DebugInternalsCmds {
     OpenTree { path: std::path::PathBuf },
+}
+
+/// Internal diagnostic and tooling commands for development
+#[derive(Parser)]
+struct InternalsOpts {
+    #[command(subcommand)]
+    command: InternalsCmds,
+}
+
+#[derive(Subcommand)]
+enum InternalsCmds {
+    /// Dump CLI structure as JSON for man page generation
+    DumpCliJson,
 }
 
 /// SSH connection options for accessing running VMs.
@@ -152,6 +166,10 @@ enum Commands {
     /// Internal debugging and diagnostic tools (hidden from help)
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
+
+    /// Internal diagnostic and tooling commands for development
+    #[clap(hide = true)]
+    Internals(InternalsOpts),
 }
 
 /// Install and configure the tracing/logging system.
@@ -229,6 +247,12 @@ fn main() -> Result<(), Report> {
                 )?;
                 let fd = Dir::reopen_dir(&fd)?;
                 tracing::debug!("{:?}", fd.entries()?.into_iter().collect::<Vec<_>>());
+            }
+        },
+        Commands::Internals(opts) => match opts.command {
+            InternalsCmds::DumpCliJson => {
+                let json = cli_json::dump_cli_json()?;
+                println!("{}", json);
             }
         },
     }

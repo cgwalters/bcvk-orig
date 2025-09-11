@@ -5,10 +5,16 @@ use std::process::Command;
 
 use color_eyre::eyre::{eyre, Context, Report};
 use color_eyre::Result;
-use xshell::{cmd, Shell};
+use xshell::Shell;
+
+mod man;
 
 #[allow(clippy::type_complexity)]
-const TASKS: &[(&str, fn(&Shell) -> Result<()>)] = &[("build", build)];
+const TASKS: &[(&str, fn(&Shell) -> Result<()>)] = &[
+    ("manpages", manpages),
+    ("update-manpages", update_manpages),
+    ("sync-manpages", sync_manpages),
+];
 
 fn install_tracing() {
     use tracing_error::ErrorLayer;
@@ -59,22 +65,22 @@ fn main() -> Result<(), Report> {
     Ok(())
 }
 
-fn build(sh: &Shell) -> Result<()> {
-    cmd!(sh, "cargo build -p bcvk --release").run()?;
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            // Nothing, we can just use systemd-run
-        } else {
-            compile_error!("Unsupported OS - only Linux is supported")
-        }
-    }
-    Ok(())
-}
-
 fn print_help(_sh: &Shell) -> Result<()> {
     println!("Tasks:");
     for (name, _) in TASKS {
         println!("  - {name}");
     }
     Ok(())
+}
+
+fn manpages(sh: &Shell) -> Result<()> {
+    man::generate_man_pages(sh)
+}
+
+fn update_manpages(sh: &Shell) -> Result<()> {
+    man::update_manpages(sh)
+}
+
+fn sync_manpages(sh: &Shell) -> Result<()> {
+    man::sync_all_man_pages(sh)
 }

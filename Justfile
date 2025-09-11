@@ -1,6 +1,6 @@
 # Build the native binary
-build *ARGS:
-    cargo build --release {{ ARGS }}
+build:
+   make
 
 # Run unit tests
 test *ARGS:
