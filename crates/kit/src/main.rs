@@ -240,6 +240,12 @@ fn main() -> Result<(), Report> {
             libvirt_upload_disk::run(opts)?;
         }
         Commands::Ssh(opts) => {
+            // Wait for systemd to signal readiness before attempting SSH connection
+            run_ephemeral_ssh::wait_for_systemd_ready(
+                &opts.container_name,
+                std::time::Duration::from_secs(60),
+            )?;
+
             // Use SSH connect via container - we need SSH key path
             // For now, assume key is in standard location
             ssh::connect_via_container(

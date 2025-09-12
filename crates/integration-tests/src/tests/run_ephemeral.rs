@@ -231,9 +231,6 @@ pub fn test_run_ephemeral_execute() {
 }
 
 pub fn test_run_ephemeral_container_ssh_access() {
-    use std::thread;
-    use std::time::Duration;
-
     const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
     let bck = get_bck_command().unwrap();
 
@@ -284,7 +281,7 @@ pub fn test_run_ephemeral_container_ssh_access() {
     eprintln!("Attempting SSH connection via container...");
     let ssh_output = Command::new("timeout")
         .args([
-            "30s",
+            "120s", // Give plenty of time for VM boot and SSH to become ready
             &bck,
             "ssh",
             &container_name,
@@ -295,8 +292,11 @@ pub fn test_run_ephemeral_container_ssh_access() {
         .expect("Failed to run SSH command");
 
     let ssh_stdout = String::from_utf8_lossy(&ssh_output.stdout);
+    let ssh_stderr = String::from_utf8_lossy(&ssh_output.stderr);
 
     debug!("SSH exit status: {:?}", ssh_output.status.code());
+    eprintln!("SSH stdout: {}", ssh_stdout);
+    eprintln!("SSH stderr: {}", ssh_stderr);
 
     // Cleanup: stop the container
     let cleanup_output = Command::new("podman")

@@ -128,6 +128,10 @@ pub struct QemuConfig {
     /// Number of vCPUs (1-256)
     pub vcpus: u32,
     pub boot_mode: BootMode,
+    /// Main VirtioFS configuration for root filesystem (handled separately from additional mounts)
+    pub main_virtiofs_config: Option<VirtiofsConfig>,
+    /// VirtioFS configurations to spawn as daemons
+    pub virtiofs_configs: Vec<VirtiofsConfig>,
     /// Additional VirtIO-FS mounts
     pub additional_mounts: Vec<VirtiofsMount>,
     pub virtio_serial_devices: Vec<VirtioSerialOut>,
@@ -168,6 +172,8 @@ impl QemuConfig {
                 kernel_cmdline: vec![],
                 virtiofs_socket,
             },
+            main_virtiofs_config: None,
+            virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
             virtio_blk_devices: vec![],
@@ -192,6 +198,8 @@ impl QemuConfig {
                 primary_disk,
                 uefi: false,
             },
+            main_virtiofs_config: None,
+            virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
             virtio_blk_devices: vec![],
@@ -360,7 +368,24 @@ impl QemuConfig {
         self
     }
 
-    /// Add a virtiofs mount
+    /// Set the main virtiofs configuration for the root filesystem
+    pub fn set_main_virtiofs(&mut self, config: VirtiofsConfig) -> &mut Self {
+        self.main_virtiofs_config = Some(config);
+        self
+    }
+
+    /// Add a virtiofs configuration that will be spawned as a daemon
+    pub fn add_virtiofs(&mut self, config: VirtiofsConfig) -> &mut Self {
+        // Also add a corresponding mount so QEMU knows about it
+        self.additional_mounts.push(VirtiofsMount {
+            socket_path: config.socket_path.clone(),
+            tag: format!("virtiofs-{}", self.virtiofs_configs.len()),
+        });
+        self.virtiofs_configs.push(config);
+        self
+    }
+
+    /// Add a virtiofs mount (for pre-spawned daemons)
     pub fn add_virtiofs_mount(&mut self, socket_path: String, tag: String) -> &mut Self {
         self.additional_mounts
             .push(VirtiofsMount { socket_path, tag });
@@ -814,12 +839,35 @@ impl RunningQemu {
             })
             .unwrap_or_default();
 
+        // Spawn all virtiofsd processes first
+        let mut virtiofsd_processes = Vec::new();
+
+        // Spawn main virtiofsd if configured
+        if let Some(ref main_config) = config.main_virtiofs_config {
+            debug!("Spawning main virtiofsd for: {:?}", main_config.socket_path);
+            let process = spawn_virtiofsd_async(main_config).await?;
+            virtiofsd_processes.push(process);
+            // Wait for socket to be ready before proceeding
+            wait_for_virtiofsd_socket(&main_config.socket_path, Duration::from_secs(10)).await?;
+        }
+
+        // Spawn additional virtiofsd processes
+        for virtiofs_config in &config.virtiofs_configs {
+            debug!("Spawning virtiofsd for: {:?}", virtiofs_config.socket_path);
+            let process = spawn_virtiofsd_async(virtiofs_config).await?;
+            virtiofsd_processes.push(process);
+
+            // Wait for socket to be ready before proceeding
+            wait_for_virtiofsd_socket(&virtiofs_config.socket_path, Duration::from_secs(10))
+                .await?;
+        }
+
         // Spawn QEMU process with additional VSOCK credential if needed
         let qemu_process = spawn(&config, &creds, vsockdata)?;
 
         Ok(Self {
             qemu_process,
-            virtiofsd_processes: Vec::new(),
+            virtiofsd_processes,
             sd_notification,
         })
     }

@@ -22,7 +22,7 @@ pub struct RunEphemeralSshOpts {
 ///
 /// Monitors /run/systemd-guest.txt inside the container for the READY=1 message
 /// that indicates the VM has fully booted and is ready for connections.
-fn wait_for_systemd_ready(container_name: &str, timeout: Duration) -> Result<()> {
+pub fn wait_for_systemd_ready(container_name: &str, timeout: Duration) -> Result<()> {
     debug!(
         "Waiting for systemd READY=1 notification (timeout: {}s)...",
         timeout.as_secs()
