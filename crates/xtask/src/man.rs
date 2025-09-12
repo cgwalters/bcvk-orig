@@ -3,8 +3,8 @@
 //! This module handles both the generation of man pages from markdown sources
 //! and the synchronization of CLI options from Rust code to those markdown templates.
 
-use color_eyre::eyre::{eyre, Context, Result};
 use camino::Utf8Path;
+use color_eyre::eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use xshell::{cmd, Shell};
@@ -148,7 +148,10 @@ pub fn update_markdown_with_options(
     };
 
     let Some((_, after)) = rest.split_once(end_marker) else {
-        return Err(eyre!("Found BEGIN marker but not END marker in {}", markdown_path));
+        return Err(eyre!(
+            "Found BEGIN marker but not END marker in {}",
+            markdown_path
+        ));
     };
 
     let generated_options = format_options_as_markdown(options, positionals);
@@ -330,7 +333,10 @@ pub fn generate_man_pages(sh: &Shell) -> Result<()> {
         let (base_name, section) = filename
             .rsplit_once('.')
             .and_then(|(name, section_str)| {
-                section_str.parse::<u8>().ok().map(|section| (name, section))
+                section_str
+                    .parse::<u8>()
+                    .ok()
+                    .map(|section| (name, section))
             })
             .unwrap_or((filename, 8)); // Default to section 8 for commands
 
@@ -348,12 +354,17 @@ pub fn generate_man_pages(sh: &Shell) -> Result<()> {
         if cmd!(sh, "which go-md2man").quiet().run().is_ok() {
             cmd!(sh, "go-md2man -in {temp_path} -out {output_file}")
                 .run()
-                .with_context(|| format!("Converting {} to man page with go-md2man", path.display()))?;
+                .with_context(|| {
+                    format!("Converting {} to man page with go-md2man", path.display())
+                })?;
         } else {
             // Fallback to pandoc if go-md2man is not available
-            cmd!(sh, "pandoc --from=markdown --to=man --output={output_file} {temp_path}")
-                .run()
-                .with_context(|| format!("Converting {} to man page with pandoc", path.display()))?;
+            cmd!(
+                sh,
+                "pandoc --from=markdown --to=man --output={output_file} {temp_path}"
+            )
+            .run()
+            .with_context(|| format!("Converting {} to man page with pandoc", path.display()))?;
         }
 
         // Clean up temporary file

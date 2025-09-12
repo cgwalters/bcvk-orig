@@ -228,7 +228,7 @@ impl CommonVmOpts {
 }
 
 /// Ephemeral VM options: container-style flags, host bind mounts, systemd injection.
-#[derive(Parser, Debug, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 pub struct RunEphemeralOpts {
     #[clap(help = "Container image to run as ephemeral VM")]
     pub image: String,
@@ -279,16 +279,46 @@ pub struct RunEphemeralOpts {
     pub mount_disk_files: Vec<String>,
 }
 
+/// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
+/// Returns the container ID instead of executing the command.
+pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
+    let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+
+    let output = cmd.output().context("Failed to execute podman command")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!("Podman command failed: {}", stderr));
+    }
+
+    // Return the container ID from stdout
+    let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(container_id)
+}
+
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
+    let mut cmd = prepare_run_command(opts)?;
+    // At this point our process is replaced by `podman`, we are just a wrapper for creating
+    // a container image and nothing else lives past that event.
+    return Err(cmd.exec()).context("execve");
+}
+
+fn prepare_run_command(opts: RunEphemeralOpts) -> Result<std::process::Command> {
+    let (cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+    Ok(cmd)
+}
+
+fn prepare_run_command_with_temp(
+    opts: RunEphemeralOpts,
+) -> Result<(std::process::Command, tempfile::TempDir)> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
 
     let script = include_str!("../scripts/entrypoint.sh");
 
     let td = tempfile::tempdir()?;
-    let td = td.path().to_str().unwrap();
+    let td_path = td.path().to_str().unwrap();
 
-    let entrypoint_path = &format!("{td}/entrypoint");
+    let entrypoint_path = &format!("{}/entrypoint", td_path);
     {
         let f = File::create(entrypoint_path)?;
         let mut f = BufWriter::new(f);
@@ -410,7 +440,7 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         "-v",
         "/usr:/run/hostusr:ro", // Bind mount host /usr as read-only
         "-v",
-        &format!("{entrypoint_path}:{ENTRYPOINT}"),
+        &format!("{}:{}", entrypoint_path, ENTRYPOINT),
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
         // And bind mount in the pristine image (without any mounts on top)
@@ -491,9 +521,7 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         debug!("Executing: podman {}", args.join(" "));
     }
 
-    // At this point our process is replaced by `podman`, we are just a wrapper for creating
-    // a container image and nothing else lives past that event.
-    return Err(cmd.exec()).context("execve");
+    Ok((cmd, td))
 }
 
 /// Process --mount-disk-file specs: parse file:name format, create sparse files if needed (2x image size),

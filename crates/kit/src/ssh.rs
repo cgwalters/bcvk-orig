@@ -173,6 +173,27 @@ pub fn connect_via_container(
     ssh_user: &str,
     args: Vec<String>,
 ) -> Result<()> {
+    let status = connect_via_container_with_status(container_name, _ssh_key, ssh_user, args)?;
+    if !status.success() {
+        return Err(eyre!(
+            "SSH connection failed with exit code: {:?}",
+            status.code()
+        ));
+    }
+    Ok(())
+}
+
+/// Connect to VM via container-based SSH access, returning the exit status
+///
+/// Similar to `connect_via_container` but returns the process exit status
+/// instead of an error when SSH exits with non-zero code. This is useful
+/// for capturing the exit code of remote commands.
+pub fn connect_via_container_with_status(
+    container_name: &str,
+    _ssh_key: &Path,
+    ssh_user: &str,
+    args: Vec<String>,
+) -> Result<std::process::ExitStatus> {
     debug!("Connecting to VM via container: {}", container_name);
 
     // Verify container exists and is running
@@ -223,17 +244,9 @@ pub fn connect_via_container(
 
     debug!("Executing: podman {:?}", cmd.get_args().collect::<Vec<_>>());
 
-    // Execute the command
-    let status = cmd.status()?;
-
-    if !status.success() {
-        return Err(eyre!(
-            "SSH connection failed with exit code: {:?}",
-            status.code()
-        ));
-    }
-
-    Ok(())
+    // Execute the command and return status
+    cmd.status()
+        .map_err(|e| eyre!("Failed to execute SSH command: {}", e))
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ mod podman;
 #[allow(dead_code)]
 mod qemu;
 mod run_ephemeral;
+mod run_ephemeral_ssh;
 mod run_install;
 mod ssh;
 #[allow(dead_code)]
@@ -127,6 +128,15 @@ enum Commands {
     #[clap(name = "run-ephemeral")]
     RunEphemeral(run_ephemeral::RunEphemeralOpts),
 
+    /// Run ephemeral VM and immediately SSH into it with lifecycle binding
+    ///
+    /// Combines run-ephemeral with SSH access in a single command. The VM
+    /// lifecycle is bound to the SSH session - when SSH exits, the VM is
+    /// automatically cleaned up. Perfect for interactive development and
+    /// testing workflows.
+    #[clap(name = "run-ephemeral-ssh")]
+    RunEphemeralSsh(run_ephemeral_ssh::RunEphemeralSshOpts),
+
     /// Install bootc images to persistent disk images
     ///
     /// Performs automated installation of bootc containers to disk images
@@ -213,6 +223,9 @@ fn main() -> Result<(), Report> {
         Commands::Images(opts) => opts.run()?,
         Commands::RunEphemeral(opts) => {
             run_ephemeral::run(opts)?;
+        }
+        Commands::RunEphemeralSsh(opts) => {
+            run_ephemeral_ssh::run_ephemeral_ssh(opts)?;
         }
         Commands::RunInstall(opts) => {
             run_install::run(opts)?;

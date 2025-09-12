@@ -54,6 +54,7 @@ mod tests {
     pub mod libvirt_verb;
     pub mod mount_feature;
     pub mod run_ephemeral;
+    pub mod run_ephemeral_ssh;
     pub mod run_install;
 }
 
@@ -150,6 +151,22 @@ fn main() {
         }),
         Trial::test("run_ephemeral_vsock_systemd_debugging", || {
             tests::run_ephemeral::test_run_ephemeral_vsock_systemd_debugging();
+            Ok(())
+        }),
+        Trial::test("run_ephemeral_ssh_command", || {
+            tests::run_ephemeral_ssh::test_run_ephemeral_ssh_command();
+            Ok(())
+        }),
+        Trial::test("run_ephemeral_ssh_cleanup", || {
+            tests::run_ephemeral_ssh::test_run_ephemeral_ssh_cleanup();
+            Ok(())
+        }),
+        Trial::test("run_ephemeral_ssh_system_command", || {
+            tests::run_ephemeral_ssh::test_run_ephemeral_ssh_system_command();
+            Ok(())
+        }),
+        Trial::test("run_ephemeral_ssh_exit_code", || {
+            tests::run_ephemeral_ssh::test_run_ephemeral_ssh_exit_code();
             Ok(())
         }),
         Trial::test("mount_feature_bind", || {

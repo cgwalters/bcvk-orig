@@ -56,20 +56,16 @@ pub fn command_to_json(cmd: &Command) -> CliCommand {
                 multiple: arg.get_action().takes_values(),
             });
         } else {
-            let long = arg
-                .get_long()
-                .unwrap_or(id)
-                .to_string();
-            
+            let long = arg.get_long().unwrap_or(id).to_string();
+
             let short = arg.get_short().map(|c| c.to_string());
-            
-            let value_name = arg.get_value_names()
+
+            let value_name = arg
+                .get_value_names()
                 .and_then(|names| names.first())
                 .map(|name| name.as_str().to_string());
 
-            let help = arg.get_help()
-                .map(|h| h.to_string())
-                .unwrap_or_default();
+            let help = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
 
             let possible_values = arg
                 .get_possible_values()
@@ -114,7 +110,7 @@ pub fn command_to_json(cmd: &Command) -> CliCommand {
 /// Dump the complete CLI structure as JSON
 pub fn dump_cli_json() -> color_eyre::Result<String> {
     use clap::CommandFactory;
-    
+
     let cmd = crate::Cli::command();
     let json_structure = command_to_json(&cmd);
     let json = serde_json::to_string_pretty(&json_structure)?;
