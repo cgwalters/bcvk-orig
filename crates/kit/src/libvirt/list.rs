@@ -46,9 +46,7 @@ pub struct BootcVolume {
     pub path: String,
     pub source_image: Option<String>,
     pub source_digest: Option<String>,
-    pub filesystem: Option<String>,
     pub created: Option<String>,
-    pub bootc_kit_version: Option<String>,
 }
 
 impl BootcVolume {
@@ -69,9 +67,7 @@ impl BootcVolume {
             "path": self.path,
             "source_image": self.source_image,
             "source_digest": self.source_digest,
-            "filesystem": self.filesystem,
             "created": self.created,
-            "bootc_kit_version": self.bootc_kit_version
         })
     }
 
@@ -89,16 +85,8 @@ impl BootcVolume {
             output.push_str(&format!("\n  Path: {}", self.path));
             output.push_str(&format!("\n  Format: {}", self.format));
 
-            if let Some(ref filesystem) = self.filesystem {
-                output.push_str(&format!("\n  Filesystem: {}", filesystem));
-            }
-
             if let Some(ref created) = self.created {
                 output.push_str(&format!("\n  Created: {}", created));
-            }
-
-            if let Some(ref version) = self.bootc_kit_version {
-                output.push_str(&format!("\n  bcvk Version: {}", version));
             }
         }
 
@@ -217,9 +205,7 @@ impl LibvirtListOpts {
 
         let mut source_image = None;
         let mut source_digest = None;
-        let mut filesystem = None;
         let mut created = None;
-        let mut bootc_kit_version = None;
 
         if xml_output.status.success() {
             let xml = String::from_utf8(xml_output.stdout)?;
@@ -239,16 +225,8 @@ impl LibvirtListOpts {
                             .get("source_digest")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
-                        filesystem = metadata
-                            .get("filesystem")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
                         created = metadata
                             .get("created")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        bootc_kit_version = metadata
-                            .get("bootc_kit_version")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
                     }
@@ -259,9 +237,7 @@ impl LibvirtListOpts {
             if source_image.is_none() {
                 source_image = extract_xml_value(&xml, "bootc:source-image");
                 source_digest = extract_xml_value(&xml, "bootc:source-digest");
-                filesystem = extract_xml_value(&xml, "bootc:filesystem");
                 created = extract_xml_value(&xml, "bootc:created");
-                bootc_kit_version = extract_xml_value(&xml, "bootc:bcvk-version");
             }
         }
 
@@ -272,9 +248,7 @@ impl LibvirtListOpts {
             path,
             source_image,
             source_digest,
-            filesystem,
             created,
-            bootc_kit_version,
         })
     }
 

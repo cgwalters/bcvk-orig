@@ -98,6 +98,7 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncReadExt;
 use tracing::debug;
 
 /// Default memory size in MB
@@ -523,12 +524,6 @@ fn prepare_run_command_with_temp(
         all_serial_devices.push("executestatus:/run/execute-output/execute-status.txt".to_string());
     }
 
-    // Pass virtio-serial devices as environment variable
-    if !all_serial_devices.is_empty() {
-        let serial_devices = all_serial_devices.join(",");
-        cmd.args(["-e", &format!("BOOTC_VIRTIO_SERIAL={}", serial_devices)]);
-    }
-
     // Pass disk files as environment variable
     if !processed_disk_files.is_empty() {
         let disk_specs = processed_disk_files
@@ -700,6 +695,18 @@ fn inject_systemd_units() -> Result<()> {
 
     debug!("Systemd unit injection complete");
     Ok(())
+}
+
+/// Parse exit code from systemd service status output
+fn parse_service_exit_code(status_content: &str) -> Result<i32> {
+    for line in status_content.lines() {
+        if let Some(codeval) = line.strip_prefix("ExecMainStatus=") {
+            let exit_code: i32 = codeval.parse().context("Parsing ExecMainStatus")?;
+            return Ok(exit_code);
+        }
+    }
+    // If no exit code found, assume success
+    Ok(0)
 }
 
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
@@ -888,13 +895,8 @@ WantedBy=local-fs.target
         }
     }
 
-    // Handle --execute: create temp directory and setup virtio-serial devices
-    if !opts.common.execute.is_empty() {
-        // Create the output files for execute
-        std::fs::create_dir_all("/run/execute-output")?;
-        std::fs::File::create("/run/execute-output/execute-output.txt")?;
-        std::fs::File::create("/run/execute-output/execute-status.txt")?;
-    }
+    // Handle --execute: pipes will be created when adding to qemu_config later
+    // No need to create files anymore as we're using pipes
 
     match opts.common.execute.as_slice() {
         [] => {}
@@ -986,19 +988,6 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
     kernel_cmdline.extend(opts.common.kernel_args.clone());
 
-    // Parse virtio-serial-out arguments from environment variable
-    let mut virtio_serial_devices = Vec::new();
-    if let Ok(serial_env) = std::env::var("BOOTC_VIRTIO_SERIAL") {
-        for serial_spec in serial_env.split(',') {
-            if let Some((name, output_file)) = serial_spec.split_once(':') {
-                virtio_serial_devices.push(crate::qemu::VirtioSerialOut {
-                    name: name.to_string(),
-                    output_file: output_file.to_string(),
-                });
-            }
-        }
-    }
-
     // Parse disk files from environment variable
     let mut virtio_blk_devices = Vec::new();
     if let Ok(disk_env) = std::env::var("BOOTC_DISK_FILES") {
@@ -1033,13 +1022,13 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         qemu_config.add_virtiofs(virtiofs_config);
     }
 
-    // Add virtio-serial devices
-    for serial_device in &virtio_serial_devices {
-        qemu_config.add_virtio_serial_out(
-            serial_device.name.clone(),
-            serial_device.output_file.clone(),
-        );
-    }
+    let exec_pipes = if !opts.common.execute.is_empty() {
+        let execute_pipefd: File = qemu_config.add_virtio_serial_pipe("execute")?.into();
+        let status_pipefd: File = qemu_config.add_virtio_serial_pipe("executestatus")?.into();
+        Some((execute_pipefd, status_pipefd))
+    } else {
+        None
+    };
 
     // Add virtio-blk devices
     for blk_device in virtio_blk_devices {
@@ -1068,193 +1057,47 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
 
     // Handle execute command output streaming if needed
-    if !opts.common.execute.is_empty() {
-        return handle_execute_output_streaming(qemu, &opts.common.execute).await;
-    }
+    if let Some((exec_pipefd, status_pipefd)) = exec_pipes {
+        tracing::debug!("Starting execute output streaming with pipes");
+        let output_copier = async move {
+            let fd = tokio::fs::File::from(exec_pipefd);
+            let mut bufr = tokio::io::BufReader::new(fd);
+            let mut stdout = tokio::io::stdout();
+            let result = tokio::io::copy(&mut bufr, &mut stdout).await;
+            tracing::debug!("Output copy result: {:?}", result);
+            result
+        };
+        let mut status_reader = tokio::io::BufReader::new(tokio::fs::File::from(status_pipefd));
+        let mut status = String::new();
+        let status_reader = status_reader.read_to_string(&mut status);
 
-    // Wait for QEMU to complete
-    let exit_status = qemu.wait().await?;
-    if !exit_status.success() {
-        return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+        // And wait for all tasks
+        let (qemu, output_copier, execstatus) =
+            tokio::join!(qemu.wait(), output_copier, status_reader);
+        // Do check for errors from reading from the execstatus pipe
+        let _ = execstatus.context("Reading execstatus")?;
+
+        // Discard errors from qemu and the output copier
+        tracing::debug!("qemu exit status: {qemu:?}");
+        tracing::debug!("output copy: {output_copier:?}");
+
+        // Parse exit code from systemd service status
+        let exit_code = parse_service_exit_code(&status)?;
+        if exit_code != 0 {
+            return Err(eyre!(
+                "Execute command failed with exit code: {}",
+                exit_code
+            ));
+        }
+    } else {
+        // Wait for QEMU to complete
+        let exit_status = qemu.wait().await?;
+        if !exit_status.success() {
+            return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+        }
     }
 
     debug!("QEMU completed successfully");
-
-    Ok(())
-}
-
-/// Handle execute command output streaming with simplified coordination
-async fn handle_execute_output_streaming(
-    mut qemu: crate::qemu::RunningQemu,
-    _execute_commands: &[String],
-) -> Result<()> {
-    // Parse virtio-serial-out arguments from environment variable
-    let mut execute_output_file = None;
-    let mut execute_status_file = None;
-
-    if let Ok(serial_env) = std::env::var("BOOTC_VIRTIO_SERIAL") {
-        for serial_spec in serial_env.split(',') {
-            if let Some((name, output_file)) = serial_spec.split_once(':') {
-                match name {
-                    "execute" => execute_output_file = Some(output_file.to_string()),
-                    "executestatus" => execute_status_file = Some(output_file.to_string()),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    if let Some(output_file) = execute_output_file {
-        return stream_execute_output(qemu, output_file, execute_status_file).await;
-    }
-
-    // No execute output file, just wait for QEMU to complete
-    let exit_status = qemu.wait().await?;
-    if !exit_status.success() {
-        return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
-    }
-
-    Ok(())
-}
-
-/// Stream execute command output with simplified coordination (no external virtiofsd management)
-async fn stream_execute_output(
-    mut qemu: crate::qemu::RunningQemu,
-    output_file: String,
-    execute_status_file: Option<String>,
-) -> Result<()> {
-    use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::select;
-    use tokio::task;
-
-    debug!("Starting QEMU with real-time output streaming for execute commands");
-
-    // Set up output streaming task (async version)
-    let output_file_path = output_file.clone();
-    let finished = Arc::new(AtomicBool::new(false));
-    let finished_clone = finished.clone();
-
-    let mut output_task = task::spawn(async move {
-        let mut file_position = 0u64;
-        let mut last_size = 0u64;
-        let mut creation_timeout = 0;
-        const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
-
-        // Wait for the file to be populated
-        while creation_timeout < MAX_CREATION_TIMEOUT && !finished_clone.load(Ordering::Relaxed) {
-            if let Ok(metadata) = std::fs::metadata(&output_file_path) {
-                if metadata.len() > 0 {
-                    break;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            creation_timeout += 1;
-        }
-
-        if creation_timeout >= MAX_CREATION_TIMEOUT {
-            debug!(
-                "Output file content timeout after {}ms",
-                MAX_CREATION_TIMEOUT * 100
-            );
-            return;
-        }
-
-        debug!("Output streaming started");
-
-        loop {
-            if let Ok(metadata) = std::fs::metadata(&output_file_path) {
-                let current_size = metadata.len();
-                if current_size > last_size {
-                    if let Ok(mut file) = File::open(&output_file_path) {
-                        if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
-                            let reader = BufReader::new(file);
-                            let mut bytes_read = 0u64;
-
-                            for line in reader.lines() {
-                                if let Ok(line) = line {
-                                    println!("{}", line);
-                                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                                    bytes_read += line.as_bytes().len() as u64 + 1;
-                                }
-                            }
-
-                            file_position += bytes_read;
-                        }
-                        last_size = current_size;
-                    }
-                }
-            }
-
-            // Check if we should exit
-            if finished_clone.load(Ordering::Relaxed) {
-                // Read any remaining output
-                if let Ok(mut file) = File::open(&output_file_path) {
-                    if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
-                        let reader = BufReader::new(file);
-                        for line in reader.lines() {
-                            if let Ok(line) = line {
-                                println!("{}", line);
-                                std::io::Write::flush(&mut std::io::stdout()).ok();
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        debug!("Output streaming task finished");
-    });
-
-    // Wait for QEMU to complete while streaming output
-    select! {
-        qemu_result = qemu.wait() => {
-            // Signal the output task to finish
-            finished.store(true, Ordering::Relaxed);
-
-            // Wait for output task to complete
-            let _ = output_task.await;
-
-            match qemu_result {
-                Ok(exit_status) => {
-                    if !exit_status.success() {
-                        return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
-                    }
-
-                    // Check for execute status
-                    if let Some(status_file) = execute_status_file {
-                        debug!("Checking for execute status file: {}", status_file);
-                        if std::path::Path::new(&status_file).exists() {
-                            debug!("Status file exists, reading content");
-                            let r = std::fs::read_to_string(&status_file)?;
-                            for line in r.lines() {
-                                if let Some(codeval) = line.strip_prefix("ExecMainStatus=") {
-                                    let exit_code: i32 =
-                                        codeval.parse().context("Parsing ExecMainStatus")?;
-                                    if exit_code != 0 {
-                                        return Err(eyre!(
-                                            "Execute command failed with exit code: {}",
-                                            exit_code
-                                        ));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                },
-                Err(e) => return Err(e),
-            }
-        }
-        _ = &mut output_task => {
-            debug!("Output streaming task completed");
-        }
-    }
 
     Ok(())
 }

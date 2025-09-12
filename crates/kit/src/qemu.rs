@@ -38,6 +38,15 @@ pub struct VirtioSerialOut {
     pub output_file: String,
 }
 
+/// VirtIO-Serial device with pipe-based output
+#[derive(Debug)]
+pub struct VirtioSerialPipe {
+    /// Device name (becomes /dev/virtio-ports/{name})
+    pub name: String,
+    /// Write end of the pipe (passed to QEMU)
+    pub write_fd: OwnedFd,
+}
+
 /// VirtIO-Block storage device configuration.
 /// Appears as /dev/disk/by-id/virtio-{serial} in guest.
 #[derive(Debug)]
@@ -135,6 +144,7 @@ pub struct QemuConfig {
     /// Additional VirtIO-FS mounts
     pub additional_mounts: Vec<VirtiofsMount>,
     pub virtio_serial_devices: Vec<VirtioSerialOut>,
+    pub virtio_serial_pipes: Vec<VirtioSerialPipe>,
     pub virtio_blk_devices: Vec<VirtioBlkDevice>,
     pub display_mode: DisplayMode,
     pub network_mode: NetworkMode,
@@ -176,6 +186,7 @@ impl QemuConfig {
             virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
+            virtio_serial_pipes: vec![],
             virtio_blk_devices: vec![],
             display_mode: DisplayMode::default(),
             network_mode: NetworkMode::default(),
@@ -202,6 +213,7 @@ impl QemuConfig {
             virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
+            virtio_serial_pipes: vec![],
             virtio_blk_devices: vec![],
             display_mode: DisplayMode::default(),
             network_mode: NetworkMode::default(),
@@ -397,6 +409,21 @@ impl QemuConfig {
         self.virtio_serial_devices
             .push(VirtioSerialOut { name, output_file });
         self
+    }
+
+    /// Create a virtio-serial device with pipe-based output
+    pub fn add_virtio_serial_pipe(&mut self, name: &str) -> Result<OwnedFd> {
+        // Create a pipe for QEMU chardev communication
+        use rustix::pipe::pipe;
+        let (read_fd, write_fd) = pipe().context("Failed to create pipe")?;
+
+        let device = VirtioSerialPipe {
+            name: name.to_owned(),
+            write_fd,
+        };
+
+        self.virtio_serial_pipes.push(device);
+        Ok(read_fd)
     }
 
     /// Add SMBIOS credential for systemd credential passing
@@ -618,6 +645,44 @@ fn spawn(
         }
     }
 
+    // Add virtio-serial devices with pipes using fd-set
+    if !config.virtio_serial_pipes.is_empty() {
+        // Add the virtio-serial controller if not already added
+        if config.virtio_serial_devices.is_empty() {
+            cmd.args(["-device", "virtio-serial"]);
+        }
+
+        for (idx, serial_pipe) in config.virtio_serial_pipes.iter().enumerate() {
+            let fd_id = 100 + idx as u32; // Start at 100 to avoid conflicts
+            let set_id = idx + 1; // fdset starts at 1
+
+            // Pass the write FD to QEMU
+            cmd.take_fd_n(
+                Arc::new(
+                    serial_pipe
+                        .write_fd
+                        .try_clone()
+                        .context("Failed to clone write fd")?,
+                ),
+                fd_id as i32,
+            );
+
+            // Build fd-set and chardev arguments using CoreOS pattern
+            let char_id = format!("serial_pipe_char{}", idx);
+            cmd.args([
+                "-add-fd",
+                &format!("fd={},set={}", fd_id, set_id),
+                "-chardev",
+                &format!("file,id={},path=/dev/fdset/{},append=on", char_id, set_id),
+                "-device",
+                &format!(
+                    "virtserialport,chardev={},name={}",
+                    char_id, serial_pipe.name
+                ),
+            ]);
+        }
+    }
+
     // Add virtio-blk block devices
     for (idx, blk_device) in config.virtio_blk_devices.iter().enumerate() {
         let drive_id = format!("drive{}", idx);
@@ -715,6 +780,8 @@ fn spawn(
             }
         }
     }
+
+    tracing::debug!("{cmd:?}");
 
     cmd.spawn().context("Failed to spawn QEMU")
 }
@@ -848,7 +915,6 @@ impl RunningQemu {
             wait_for_virtiofsd_socket(&virtiofs_config.socket_path, Duration::from_secs(10))
                 .await?;
         }
-
         // Spawn QEMU process with additional VSOCK credential if needed
         let qemu_process = spawn(&config, &creds, vsockdata)?;
 
