@@ -1,7 +1,7 @@
 use color_eyre::Result;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::run_ephemeral::{run_detached, RunEphemeralOpts};
@@ -18,10 +18,52 @@ pub struct RunEphemeralSshOpts {
     pub ssh_args: Vec<String>,
 }
 
+/// Wait for systemd to report READY=1 in the guest notification file
+///
+/// Monitors /run/systemd-guest.txt inside the container for the READY=1 message
+/// that indicates the VM has fully booted and is ready for connections.
+fn wait_for_systemd_ready(container_name: &str, timeout: Duration) -> Result<()> {
+    debug!(
+        "Waiting for systemd READY=1 notification (timeout: {}s)...",
+        timeout.as_secs()
+    );
+    let start_time = Instant::now();
+
+    while start_time.elapsed() < timeout {
+        let status = Command::new("podman")
+            .args([
+                "exec",
+                container_name,
+                "grep",
+                "-q",
+                "READY=1",
+                "/run/systemd-guest.txt",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if let Ok(status) = status {
+            if status.success() {
+                debug!("Received systemd READY=1 notification");
+                return Ok(());
+            }
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    Err(color_eyre::eyre::eyre!(
+        "Timeout waiting for systemd READY=1 notification after {}s",
+        timeout.as_secs()
+    ))
+}
+
 /// Run an ephemeral pod and immediately SSH into it, with lifecycle binding
 pub fn run_ephemeral_ssh(opts: RunEphemeralSshOpts) -> Result<()> {
     // Start the ephemeral pod in detached mode with SSH enabled
     let mut ephemeral_opts = opts.run_opts.clone();
+    ephemeral_opts.podman.rm = true;
     ephemeral_opts.podman.detach = true;
     ephemeral_opts.common.ssh_keygen = true; // Enable SSH key generation and access
 
@@ -33,11 +75,8 @@ pub fn run_ephemeral_ssh(opts: RunEphemeralSshOpts) -> Result<()> {
     let container_name = container_id;
     debug!("Using container ID: {}", container_name);
 
-    // No need for threading or coordination flags since we'll cleanup synchronously
-
-    // Give the VM time to boot (VMs take longer than containers)
-    debug!("Waiting for VM to boot...");
-    thread::sleep(Duration::from_secs(20));
+    // Wait for systemd to signal readiness instead of arbitrary sleep
+    wait_for_systemd_ready(&container_name, Duration::from_secs(60))?;
 
     // Execute SSH connection directly (no thread needed for this)
     // This allows SSH output to be properly forwarded to stdout/stderr
@@ -57,11 +96,6 @@ pub fn run_ephemeral_ssh(opts: RunEphemeralSshOpts) -> Result<()> {
 
     // Cleanup: stop and remove the container immediately
     debug!("SSH session ended, cleaning up ephemeral pod...");
-    let _ = Command::new("podman")
-        .args(["stop", &container_name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 
     let _ = Command::new("podman")
         .args(["rm", "-f", &container_name])

@@ -274,10 +274,6 @@ pub fn test_run_ephemeral_container_ssh_access() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Wait for VM to boot
-    eprintln!("Waiting 45 seconds for VM to boot...");
-    thread::sleep(Duration::from_secs(45));
-
     // Try to SSH into the VM via container (with a simple command)
     eprintln!("Attempting SSH connection via container...");
     let ssh_output = Command::new("timeout")
