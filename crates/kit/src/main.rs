@@ -110,6 +110,7 @@ enum Commands {
     /// Allows containers to safely run host commands with proper isolation
     /// and resource management. Useful for accessing host tools and services
     /// that containers need to interact with.
+    #[clap(hide = true)]
     Hostexec(HostExecOpts),
 
     /// Manage and inspect bootc container images
