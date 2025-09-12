@@ -6,8 +6,9 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cap_std_ext::cmdext::CapStdExtCommandExt;
@@ -15,7 +16,7 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use libc::{VMADDR_CID_ANY, VMADDR_PORT_ANY};
 use nix::sys::socket::{accept, bind, getsockname, socket, AddressFamily, SockFlag, SockType};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use vsock::VsockAddr;
 
 /// VirtIO-FS mount point configuration.
@@ -96,74 +97,6 @@ impl Default for ResourceLimits {
             cpu_affinity: None,
             io_priority: None,
             nice_level: None,
-        }
-    }
-}
-
-/// RAII guard for automatic process cleanup on drop.
-#[derive(Debug)]
-pub struct ProcessCleanupGuard {
-    /// Child processes to manage
-    processes: Arc<Mutex<Vec<Child>>>,
-    /// Auto-cleanup on drop
-    cleanup_on_drop: bool,
-}
-
-impl ProcessCleanupGuard {
-    /// Kill all managed processes
-    pub fn cleanup_all(&self) -> Result<()> {
-        let mut processes = self
-            .processes
-            .lock()
-            .map_err(|_| eyre!("Failed to lock process list"))?;
-        let mut errors = Vec::new();
-
-        debug!("Cleaning up {} processes", processes.len());
-
-        let process_count = processes.len();
-        for (i, process) in processes.iter_mut().enumerate() {
-            debug!("Terminating process {}/{}", i + 1, process_count);
-
-            // Try graceful termination first
-            if let Err(e) = process.kill() {
-                errors.push(format!("Failed to kill process {}: {}", i, e));
-                continue;
-            }
-
-            // Wait a bit for graceful shutdown
-            std::thread::sleep(Duration::from_millis(100));
-
-            // Check if process terminated
-            match process.try_wait() {
-                Ok(Some(_)) => {
-                    debug!("Process {} terminated gracefully", i);
-                }
-                Ok(None) => {
-                    warn!("Process {} still running after kill signal", i);
-                    // Process might still be shutting down, we'll let the OS handle it
-                }
-                Err(e) => {
-                    errors.push(format!("Failed to check process {} status: {}", i, e));
-                }
-            }
-        }
-
-        processes.clear();
-
-        if !errors.is_empty() {
-            return Err(eyre!("Cleanup errors: {}", errors.join("; ")));
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for ProcessCleanupGuard {
-    fn drop(&mut self) {
-        if self.cleanup_on_drop {
-            if let Err(e) = self.cleanup_all() {
-                error!("Failed to cleanup processes on drop: {}", e);
-            }
         }
     }
 }
@@ -531,6 +464,13 @@ fn spawn(
     );
 
     let mut cmd = Command::new("qemu-kvm");
+    // SAFETY: This API is safe to call in a forked child.
+    unsafe {
+        cmd.pre_exec(|| {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+                .map_err(Into::into)
+        });
+    }
     cmd.args([
         "-m",
         &memory_arg,
@@ -775,6 +715,7 @@ struct VsockCopier {
 
 pub struct RunningQemu {
     pub qemu_process: Child,
+    pub virtiofsd_processes: Vec<tokio::process::Child>,
     sd_notification: Option<VsockCopier>,
 }
 
@@ -878,27 +819,20 @@ impl RunningQemu {
 
         Ok(Self {
             qemu_process,
+            virtiofsd_processes: Vec::new(),
             sd_notification,
         })
     }
 
+    /// Add a virtiofsd process to be managed by this QEMU instance
+    pub fn add_virtiofsd_process(&mut self, process: tokio::process::Child) {
+        self.virtiofsd_processes.push(process);
+    }
+
     /// Wait for QEMU process to exit
     pub async fn wait(&mut self) -> Result<std::process::ExitStatus> {
-        // Use polling to wait for process completion asynchronously
-        loop {
-            match self.qemu_process.try_wait() {
-                Ok(Some(status)) => {
-                    // Clean up the notification thread
-                    let _ = self.sd_notification.take();
-                    return Ok(status);
-                }
-                Ok(None) => {
-                    // Process still running, wait a bit
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
+        let r = self.qemu_process.wait()?;
+        Ok(r)
     }
 }
 
@@ -987,6 +921,74 @@ impl Default for VirtiofsConfig {
             debug: false,
         }
     }
+}
+
+/// Spawn virtiofsd daemon process as tokio::process::Child.
+/// Searches for binary in /usr/libexec, /usr/bin, /usr/local/bin.
+/// Creates socket directory if needed, redirects output unless debug=true.
+pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::process::Child> {
+    // Validate configuration
+    validate_virtiofsd_config(config)?;
+
+    // Try common virtiofsd binary locations
+    let virtiofsd_paths = [
+        "/usr/libexec/virtiofsd",
+        "/usr/bin/virtiofsd",
+        "/usr/local/bin/virtiofsd",
+    ];
+
+    let virtiofsd_binary = virtiofsd_paths
+        .iter()
+        .find(|path| std::path::Path::new(path).exists())
+        .ok_or_else(|| {
+            eyre!(
+                "virtiofsd binary not found. Searched paths: {}. Please install virtiofsd.",
+                virtiofsd_paths.join(", ")
+            )
+        })?;
+
+    let mut cmd = tokio::process::Command::new(virtiofsd_binary);
+    // SAFETY: This API is safe to call in a forked child.
+    unsafe {
+        cmd.pre_exec(|| {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+                .map_err(Into::into)
+        });
+    }
+    cmd.args([
+        "--socket-path",
+        &config.socket_path,
+        "--shared-dir",
+        &config.shared_dir,
+        "--cache",
+        &config.cache_mode,
+        "--sandbox",
+        &config.sandbox,
+    ]);
+
+    // Redirect stdout/stderr to /dev/null unless debug mode is enabled
+    if !config.debug {
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    } else {
+        // In debug mode, prefix output to distinguish from QEMU
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+    }
+
+    let child = cmd.spawn().with_context(|| {
+        format!(
+            "Failed to spawn virtiofsd. Binary: {}, Socket: {}, Shared dir: {}",
+            virtiofsd_binary, config.socket_path, config.shared_dir
+        )
+    })?;
+
+    debug!(
+        "Spawned virtiofsd: binary={}, socket={}, shared_dir={}, debug={}",
+        virtiofsd_binary, config.socket_path, config.shared_dir, config.debug
+    );
+
+    Ok(child)
 }
 
 /// Spawn virtiofsd daemon process.
