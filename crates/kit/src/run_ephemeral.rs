@@ -510,12 +510,6 @@ fn prepare_run_command_with_temp(
         cmd.arg(format!("--env=RUST_LOG={log}"));
     }
 
-    // Set debug mode environment variable if requested
-    if opts.common.debug {
-        cmd.args(["-e", "DEBUG_MODE=true"]);
-        debug!("Debug mode enabled - will drop into shell instead of running QEMU");
-    }
-
     // Pass configuration as JSON via BCK_CONFIG environment variable
     let config = serde_json::to_string(&opts).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
@@ -710,16 +704,12 @@ fn inject_systemd_units() -> Result<()> {
 
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
 /// generates systemd mount units, sets up command execution, launches QEMU.
-/// DEBUG_MODE=true drops to shell instead of QEMU.
 pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
     use std::path::Path;
 
     debug!("Running QEMU implementation inside container");
-
-    // Check if we're in debug mode
-    let debug_mode = std::env::var("DEBUG_MODE").unwrap_or_default() == "true";
 
     let systemd_version = {
         let v = std::env::var("SYSTEMD_VERSION")?;
@@ -834,7 +824,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 shared_dir: source_path.to_string_lossy().to_string(),
                 cache_mode: "always".to_string(),
                 sandbox: "none".to_string(),
-                debug: debug_mode,
+                debug: false,
             };
             additional_mounts.push((virtiofsd_config, tag.clone()));
 
@@ -961,7 +951,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
     // Prepare main virtiofsd config for the source image (will be spawned by QEMU)
     let mut main_virtiofsd_config = qemu::VirtiofsConfig::default();
-    main_virtiofsd_config.debug = debug_mode;
+    main_virtiofsd_config.debug = std::env::var("DEBUG_MODE").is_ok();
 
     std::fs::create_dir_all(CONTAINER_STATEDIR)?;
 
@@ -982,133 +972,113 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         let credential = crate::sshcred::smbios_cred_for_root_ssh(&pubkey)?;
         qemu_config.add_smbios_credential(credential);
     }
-    if debug_mode {
-        debug!("=== DEBUG MODE: Dropping into bash shell ===");
-        debug!("Environment setup complete. You can:");
-        debug!("- Inspect /run/tmproot (the hybrid rootfs)");
-        debug!("- Check virtiofsd socket at /run/inner-shared/virtiofs.sock");
-        debug!("- Exit with 'exit' to terminate");
+    // Build kernel command line
+    let mut kernel_cmdline = vec![
+        "rootfstype=virtiofs".to_string(),
+        "root=rootfs".to_string(),
+        "selinux=0".to_string(),
+        "systemd.volatile=overlay".to_string(),
+    ];
 
-        let status = Command::new("bash")
-            .status()
-            .context("Failed to start debug shell")?;
+    if opts.common.console {
+        kernel_cmdline.push("console=ttyS0".to_string());
+    }
 
-        // Cleanup guard will automatically clean up virtiofsd processes on drop
+    kernel_cmdline.extend(opts.common.kernel_args.clone());
 
-        if !status.success() {
-            return Err(eyre!("Debug shell exited with non-zero status"));
+    // Parse virtio-serial-out arguments from environment variable
+    let mut virtio_serial_devices = Vec::new();
+    if let Ok(serial_env) = std::env::var("BOOTC_VIRTIO_SERIAL") {
+        for serial_spec in serial_env.split(',') {
+            if let Some((name, output_file)) = serial_spec.split_once(':') {
+                virtio_serial_devices.push(crate::qemu::VirtioSerialOut {
+                    name: name.to_string(),
+                    output_file: output_file.to_string(),
+                });
+            }
         }
+    }
+
+    // Parse disk files from environment variable
+    let mut virtio_blk_devices = Vec::new();
+    if let Ok(disk_env) = std::env::var("BOOTC_DISK_FILES") {
+        for disk_spec in disk_env.split(',') {
+            if let Some((disk_file, disk_name)) = disk_spec.split_once(':') {
+                virtio_blk_devices.push(crate::qemu::VirtioBlkDevice {
+                    disk_file: disk_file.to_string(),
+                    serial: disk_name.to_string(),
+                });
+            }
+        }
+    }
+
+    qemu_config
+        .set_kernel_cmdline(kernel_cmdline)
+        .set_console(opts.common.console);
+
+    if opts.common.ssh_keygen {
+        qemu_config.enable_ssh_access(None); // Use default port 2222
+        debug!("Enabled SSH port forwarding: host port 2222 -> guest port 22");
+
+        // We need to extract the public key from the SSH credential to inject it via SMBIOS
+        // For now, the credential is already being passed via kernel cmdline
+        // TODO: Add proper SMBIOS credential injection if needed
+    }
+
+    // Set main virtiofs configuration for root filesystem (will be spawned by QEMU)
+    qemu_config.set_main_virtiofs(main_virtiofsd_config.clone());
+
+    // Add additional virtiofs configurations (will be spawned by QEMU)
+    for (virtiofs_config, _tag) in additional_mounts {
+        qemu_config.add_virtiofs(virtiofs_config);
+    }
+
+    // Add virtio-serial devices
+    for serial_device in &virtio_serial_devices {
+        qemu_config.add_virtio_serial_out(
+            serial_device.name.clone(),
+            serial_device.output_file.clone(),
+        );
+    }
+
+    // Add virtio-blk devices
+    for blk_device in virtio_blk_devices {
+        qemu_config.add_virtio_blk_device(blk_device.disk_file, blk_device.serial);
+    }
+
+    // Only enable systemd notification debugging if the systemd version supports it
+    if systemd_version.has_vmm_notify() {
+        let log_path = Path::new("/run/systemd-guest.txt");
+        let logf = File::create(log_path).context("Creating log")?;
+        qemu_config.systemd_notify = Some(logf);
+        debug!(
+            "systemd {} supports vmm.notify_socket, enabling systemd notification debugging",
+            systemd_version.0
+        );
     } else {
-        // Build kernel command line
-        let mut kernel_cmdline = vec![
-            "rootfstype=virtiofs".to_string(),
-            "root=rootfs".to_string(),
-            "selinux=0".to_string(),
-            "systemd.volatile=overlay".to_string(),
-        ];
+        debug!(
+            "systemd {} does not support vmm.notify_socket",
+            systemd_version.0
+        );
+    }
 
-        if opts.common.console {
-            kernel_cmdline.push("console=ttyS0".to_string());
-        }
+    debug!("Starting QEMU with systemd debugging enabled");
 
-        kernel_cmdline.extend(opts.common.kernel_args.clone());
+    // Spawn QEMU with all virtiofsd processes handled internally
+    let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
 
-        // Parse virtio-serial-out arguments from environment variable
-        let mut virtio_serial_devices = Vec::new();
-        if let Ok(serial_env) = std::env::var("BOOTC_VIRTIO_SERIAL") {
-            for serial_spec in serial_env.split(',') {
-                if let Some((name, output_file)) = serial_spec.split_once(':') {
-                    virtio_serial_devices.push(crate::qemu::VirtioSerialOut {
-                        name: name.to_string(),
-                        output_file: output_file.to_string(),
-                    });
-                }
-            }
-        }
+    // Handle execute command output streaming if needed
+    if !opts.common.execute.is_empty() {
+        return handle_execute_output_streaming(qemu, &opts.common.execute).await;
+    }
 
-        // Parse disk files from environment variable
-        let mut virtio_blk_devices = Vec::new();
-        if let Ok(disk_env) = std::env::var("BOOTC_DISK_FILES") {
-            for disk_spec in disk_env.split(',') {
-                if let Some((disk_file, disk_name)) = disk_spec.split_once(':') {
-                    virtio_blk_devices.push(crate::qemu::VirtioBlkDevice {
-                        disk_file: disk_file.to_string(),
-                        serial: disk_name.to_string(),
-                    });
-                }
-            }
-        }
+    // Wait for QEMU to complete
+    let exit_status = qemu.wait().await?;
+    if !exit_status.success() {
+        return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+    }
 
-        qemu_config
-            .set_kernel_cmdline(kernel_cmdline)
-            .set_console(opts.common.console);
-
-        if opts.common.ssh_keygen {
-            qemu_config.enable_ssh_access(None); // Use default port 2222
-            debug!("Enabled SSH port forwarding: host port 2222 -> guest port 22");
-
-            // We need to extract the public key from the SSH credential to inject it via SMBIOS
-            // For now, the credential is already being passed via kernel cmdline
-            // TODO: Add proper SMBIOS credential injection if needed
-        }
-
-        // Set main virtiofs configuration for root filesystem (will be spawned by QEMU)
-        qemu_config.set_main_virtiofs(main_virtiofsd_config.clone());
-
-        // Add additional virtiofs configurations (will be spawned by QEMU)
-        for (virtiofs_config, _tag) in additional_mounts {
-            qemu_config.add_virtiofs(virtiofs_config);
-        }
-
-        // Add virtio-serial devices
-        for serial_device in &virtio_serial_devices {
-            qemu_config.add_virtio_serial_out(
-                serial_device.name.clone(),
-                serial_device.output_file.clone(),
-            );
-        }
-
-        // Add virtio-blk devices
-        for blk_device in virtio_blk_devices {
-            qemu_config.add_virtio_blk_device(blk_device.disk_file, blk_device.serial);
-        }
-
-        // Only enable systemd notification debugging if the systemd version supports it
-        if systemd_version.has_vmm_notify() {
-            let log_path = Path::new("/run/systemd-guest.txt");
-            let logf = File::create(log_path).context("Creating log")?;
-            qemu_config.systemd_notify = Some(logf);
-            debug!(
-                "systemd {} supports vmm.notify_socket, enabling systemd notification debugging",
-                systemd_version.0
-            );
-        } else {
-            debug!(
-                "systemd {} does not support vmm.notify_socket",
-                systemd_version.0
-            );
-        }
-
-        debug!("Starting QEMU with systemd debugging enabled");
-
-        // Spawn QEMU with all virtiofsd processes handled internally
-        let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
-
-        // Handle execute command output streaming if needed
-        if !opts.common.execute.is_empty() {
-            return handle_execute_output_streaming(qemu, &opts.common.execute).await;
-        }
-
-        // Wait for QEMU to complete
-        let exit_status = qemu.wait().await?;
-        if !exit_status.success() {
-            return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
-        }
-
-        debug!("QEMU completed successfully");
-
-        return Ok(());
-    } // Close the else block
+    debug!("QEMU completed successfully");
 
     Ok(())
 }
