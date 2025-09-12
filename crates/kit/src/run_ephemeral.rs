@@ -118,7 +118,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
-use crate::{podman, utils, CONTAINER_STATEDIR};
+use crate::{podman, systemd, utils, CONTAINER_STATEDIR};
 
 /// Common container lifecycle options for podman commands.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
@@ -425,7 +425,7 @@ fn prepare_run_command_with_temp(
     let mut cmd = Command::new("podman");
     cmd.arg("run");
     // We always have a label
-    cmd.arg("--label=bootc.kit=1");
+    cmd.arg("--label=bcvk.ephemeral=1");
     for label in opts.podman.label.iter() {
         cmd.arg(format!("--label={label}"));
     }
@@ -718,6 +718,8 @@ pub(crate) async fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
 
     // Check if we're in debug mode
     let debug_mode = std::env::var("DEBUG_MODE").unwrap_or_default() == "true";
+
+    let systemd_version = systemd::SystemdVersion::new_current()?;
 
     // Find kernel and initramfs from the container image (not the host)
     let modules_dir = Path::new("/run/source-image/usr/lib/modules");
@@ -1067,9 +1069,21 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             qemu_config.add_virtio_blk_device(blk_device.disk_file, blk_device.serial);
         }
 
-        let log_path = Path::new("/run/systemd-guest.txt");
-        let logf = File::create(log_path).context("Creating log")?;
-        qemu_config.systemd_notify = Some(logf);
+        // Only enable systemd notification debugging if the systemd version supports it
+        if systemd_version.has_vmm_notify() {
+            let log_path = Path::new("/run/systemd-guest.txt");
+            let logf = File::create(log_path).context("Creating log")?;
+            qemu_config.systemd_notify = Some(logf);
+            debug!(
+                "systemd {} supports vmm.notify_socket, enabling systemd notification debugging",
+                systemd_version.0
+            );
+        } else {
+            debug!(
+                "systemd {} does not support vmm.notify_socket",
+                systemd_version.0
+            );
+        }
 
         debug!("Starting QEMU with systemd debugging enabled");
 

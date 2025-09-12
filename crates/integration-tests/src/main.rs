@@ -75,6 +75,33 @@ pub(crate) fn get_bck_command() -> Result<String> {
     return Ok("bcvk".to_owned());
 }
 
+/// Get the default bootc image to use for tests
+///
+/// Checks BCVK_TEST_IMAGE environment variable first, then falls back to default.
+/// This allows easily overriding the base image for all integration tests.
+///
+/// Default images:
+/// - Primary: quay.io/fedora/fedora-bootc:42 (Fedora 42 with latest features)
+/// - Alternative: quay.io/centos-bootc/centos-bootc:stream9 (CentOS Stream 9 for compatibility testing)
+pub(crate) fn get_test_image() -> String {
+    std::env::var("BCVK_TEST_IMAGE")
+        .unwrap_or_else(|_| "quay.io/fedora/fedora-bootc:42".to_string())
+}
+
+/// Get an alternative bootc image for cross-platform testing
+///
+/// Returns a different image from the primary test image to test compatibility.
+/// If BCVK_TEST_IMAGE is set to Fedora, returns CentOS Stream 9.
+/// If BCVK_TEST_IMAGE is set to CentOS, returns Fedora.
+pub(crate) fn get_alternative_test_image() -> String {
+    let primary = get_test_image();
+    if primary.contains("centos") {
+        "quay.io/fedora/fedora-bootc:42".to_string()
+    } else {
+        "quay.io/centos-bootc/centos-bootc:stream9".to_string()
+    }
+}
+
 fn test_images_list() -> Result<()> {
     println!("Running test: bcvk images list --json");
 
@@ -149,10 +176,6 @@ fn main() {
             tests::run_ephemeral::test_run_ephemeral_container_ssh_access();
             Ok(())
         }),
-        Trial::test("run_ephemeral_vsock_systemd_debugging", || {
-            tests::run_ephemeral::test_run_ephemeral_vsock_systemd_debugging();
-            Ok(())
-        }),
         Trial::test("run_ephemeral_ssh_command", || {
             tests::run_ephemeral_ssh::test_run_ephemeral_ssh_command();
             Ok(())
@@ -169,6 +192,18 @@ fn main() {
             tests::run_ephemeral_ssh::test_run_ephemeral_ssh_exit_code();
             Ok(())
         }),
+        Trial::test("run_ephemeral_ssh_cross_distro_compatibility", || {
+            tests::run_ephemeral_ssh::test_run_ephemeral_ssh_cross_distro_compatibility();
+            Ok(())
+        }),
+        Trial::test(
+            "run_ephemeral_ssh_systemd_notification_compatibility",
+            || {
+                tests::run_ephemeral_ssh::test_run_ephemeral_ssh_systemd_notification_compatibility(
+                );
+                Ok(())
+            },
+        ),
         Trial::test("mount_feature_bind", || {
             tests::mount_feature::test_mount_feature_bind();
             Ok(())

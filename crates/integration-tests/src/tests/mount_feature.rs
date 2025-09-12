@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
-use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
+use crate::{get_bck_command, get_test_image, INTEGRATION_TEST_LABEL};
 
 /// Create a systemd unit that verifies a mount exists and contains expected content
 fn create_mount_verify_unit(
@@ -118,7 +118,7 @@ pub fn test_mount_feature_bind() {
             "systemd.unit=verify-mount-testmount.service",
             "--karg",
             "systemd.journald.forward_to_console=1",
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
         ])
         .output()
         .expect("Failed to run bcvk with bind mount");
@@ -172,7 +172,7 @@ pub fn test_mount_feature_ro_bind() {
             "systemd.unit=verify-ro-mount-romount.service",
             "--karg",
             "systemd.journald.forward_to_console=1",
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
         ])
         .output()
         .expect("Failed to run bcvk with ro-bind mount");

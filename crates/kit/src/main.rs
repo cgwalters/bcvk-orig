@@ -22,6 +22,7 @@ mod run_ephemeral_ssh;
 mod ssh;
 #[allow(dead_code)]
 mod sshcred;
+pub(crate) mod systemd;
 mod to_disk;
 mod utils;
 
@@ -241,20 +242,21 @@ fn main() -> Result<(), Report> {
             libvirt_upload_disk::run(opts)?;
         }
         Commands::Ssh(opts) => {
-            // Wait for systemd to signal readiness before attempting SSH connection
-            run_ephemeral_ssh::wait_for_systemd_ready(
+            // Wait for systemd to signal readiness or fall back to SSH polling
+            let has_systemd_notify = run_ephemeral_ssh::wait_for_systemd_ready(
                 &opts.container_name,
                 std::time::Duration::from_secs(60),
             )?;
 
-            // Use SSH connect via container - we need SSH key path
-            // For now, assume key is in standard location
-            ssh::connect_via_container(
-                &opts.container_name,
-                &std::path::PathBuf::from("/tmp/ssh"),
-                "root",
-                opts.args,
-            )?;
+            if !has_systemd_notify {
+                // Fall back to SSH polling for older systemd versions
+                run_ephemeral_ssh::wait_for_ssh_ready(
+                    &opts.container_name,
+                    std::time::Duration::from_secs(60),
+                )?;
+            }
+
+            ssh::connect_via_container(&opts.container_name, opts.args)?;
         }
         Commands::ContainerEntrypoint(opts) => {
             // Create a tokio runtime for async container entrypoint operations

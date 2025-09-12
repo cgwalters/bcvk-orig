@@ -324,7 +324,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let target_disk = temp_dir.path().join("test-disk.img");
 
-        let opts = RunInstallOpts {
+        let opts = ToDiskOpts {
             source_image: "test:latest".to_string(),
             target_disk,
             label: Default::default(),
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_calculate_disk_size() -> Result<()> {
-        let opts = RunInstallOpts {
+        let opts = ToDiskOpts {
             source_image: "test:latest".to_string(),
             target_disk: "/tmp/test.img".into(),
             label: Default::default(),

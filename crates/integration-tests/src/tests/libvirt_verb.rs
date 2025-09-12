@@ -8,7 +8,7 @@
 
 use std::process::Command;
 
-use crate::get_bck_command;
+use crate::{get_bck_command, get_test_image};
 
 /// Test libvirt list functionality
 pub fn test_libvirt_list_functionality() {
@@ -185,7 +185,7 @@ pub fn test_libvirt_vm_lifecycle() {
         .output();
 
     // Create a minimal test volume (skip if no bootc container available)
-    let test_image = "quay.io/fedora/fedora-bootc:42";
+    let test_image = &get_test_image();
 
     // First try to create a domain from container image
     let output = std::process::Command::new(&bck)

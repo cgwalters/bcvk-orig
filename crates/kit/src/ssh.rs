@@ -5,7 +5,7 @@ use color_eyre::{eyre::eyre, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tracing::debug;
 
 use crate::CONTAINER_STATEDIR;
@@ -167,13 +167,8 @@ pub fn generate_default_keypair() -> Result<SshKeyPair> {
 /// - No host networking configuration required  
 /// - Container provides additional isolation layer
 /// - VM network access is controlled by QEMU configuration
-pub fn connect_via_container(
-    container_name: &str,
-    _ssh_key: &Path,
-    ssh_user: &str,
-    args: Vec<String>,
-) -> Result<()> {
-    let status = connect_via_container_with_status(container_name, _ssh_key, ssh_user, args)?;
+pub fn connect_via_container(container_name: &str, args: Vec<String>) -> Result<()> {
+    let status = connect_via_container_with_status(container_name, args)?;
     if !status.success() {
         return Err(eyre!(
             "SSH connection failed with exit code: {:?}",
@@ -183,16 +178,54 @@ pub fn connect_via_container(
     Ok(())
 }
 
-/// Connect to VM via container-based SSH access, returning the exit status
+/// SSH connection configuration options
+#[derive(Debug, Clone)]
+pub struct SshConnectionOptions {
+    /// Connection timeout in seconds (default: 30)
+    pub connect_timeout: u32,
+    /// Enable/disable TTY allocation (default: true)
+    pub allocate_tty: bool,
+    /// SSH log level (default: ERROR)
+    pub log_level: String,
+    /// Additional SSH options as key-value pairs
+    pub extra_options: Vec<(String, String)>,
+    /// Suppress output to stdout/stderr (default: false)
+    pub suppress_output: bool,
+}
+
+impl Default for SshConnectionOptions {
+    fn default() -> Self {
+        Self {
+            connect_timeout: 30,
+            allocate_tty: true,
+            log_level: "ERROR".to_string(),
+            extra_options: vec![],
+            suppress_output: false,
+        }
+    }
+}
+
+impl SshConnectionOptions {
+    /// Create options suitable for quick connectivity tests (short timeout, no TTY)
+    pub fn for_connectivity_test() -> Self {
+        Self {
+            connect_timeout: 2,
+            allocate_tty: false,
+            log_level: "ERROR".to_string(),
+            extra_options: vec![],
+            suppress_output: true,
+        }
+    }
+}
+
+/// Connect to VM via container-based SSH access with configurable options
 ///
-/// Similar to `connect_via_container` but returns the process exit status
-/// instead of an error when SSH exits with non-zero code. This is useful
-/// for capturing the exit code of remote commands.
-pub fn connect_via_container_with_status(
+/// This is the most flexible SSH connection function that allows full control
+/// over SSH options and connection parameters.
+pub fn connect_via_container_with_options(
     container_name: &str,
-    _ssh_key: &Path,
-    ssh_user: &str,
     args: Vec<String>,
+    options: &SshConnectionOptions,
 ) -> Result<std::process::ExitStatus> {
     debug!("Connecting to VM via container: {}", container_name);
 
@@ -217,9 +250,13 @@ pub fn connect_via_container_with_status(
 
     // Build podman exec command
     let mut cmd = Command::new("podman");
-    cmd.args(["exec", "-it", container_name, "ssh"]);
+    if options.allocate_tty {
+        cmd.args(["exec", "-it", container_name, "ssh"]);
+    } else {
+        cmd.args(["exec", container_name, "ssh"]);
+    }
 
-    // FIXME we should probably be re-executing in the host
+    // SSH key and security options
     let keypath = Utf8Path::new("/run/tmproot")
         .join(CONTAINER_STATEDIR.trim_start_matches('/'))
         .join("ssh");
@@ -230,10 +267,18 @@ pub fn connect_via_container_with_status(
     cmd.args(["-o", "GSSAPIAuthentication=no"]);
     cmd.args(["-o", "StrictHostKeyChecking=no"]);
     cmd.args(["-o", "UserKnownHostsFile=/dev/null"]);
-    cmd.args(["-o", "LogLevel=ERROR"]); // Reduce SSH verbosity
+
+    // Configurable options
+    cmd.args(["-o", &format!("ConnectTimeout={}", options.connect_timeout)]);
+    cmd.args(["-o", &format!("LogLevel={}", options.log_level)]);
+
+    // Add extra SSH options
+    for (key, value) in &options.extra_options {
+        cmd.args(["-o", &format!("{}={}", key, value)]);
+    }
 
     // Connect to VM via QEMU port forwarding on localhost
-    cmd.arg(&format!("{}@127.0.0.1", ssh_user));
+    cmd.arg(&format!("root@127.0.0.1"));
     cmd.args(["-p", "2222"]); // Use the forwarded port
 
     // Add any additional arguments
@@ -244,9 +289,26 @@ pub fn connect_via_container_with_status(
 
     debug!("Executing: podman {:?}", cmd.get_args().collect::<Vec<_>>());
 
+    // Suppress output if requested (useful for connectivity testing)
+    if options.suppress_output {
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+
     // Execute the command and return status
     cmd.status()
         .map_err(|e| eyre!("Failed to execute SSH command: {}", e))
+}
+
+/// Connect to VM via container-based SSH access, returning the exit status
+///
+/// Similar to `connect_via_container` but returns the process exit status
+/// instead of an error when SSH exits with non-zero code. This is useful
+/// for capturing the exit code of remote commands.
+pub fn connect_via_container_with_status(
+    container_name: &str,
+    args: Vec<String>,
+) -> Result<std::process::ExitStatus> {
+    connect_via_container_with_options(container_name, args, &SshConnectionOptions::default())
 }
 
 #[cfg(test)]
@@ -271,5 +333,42 @@ mod tests {
         let metadata = std::fs::metadata(&key_pair.private_key_path).unwrap();
         let permissions = metadata.permissions();
         assert_eq!(permissions.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn test_ssh_connection_options() {
+        // Test default options
+        let default_opts = SshConnectionOptions::default();
+        assert_eq!(default_opts.connect_timeout, 30);
+        assert!(default_opts.allocate_tty);
+        assert_eq!(default_opts.log_level, "ERROR");
+        assert!(default_opts.extra_options.is_empty());
+        assert!(!default_opts.suppress_output);
+
+        // Test connectivity test options
+        let test_opts = SshConnectionOptions::for_connectivity_test();
+        assert_eq!(test_opts.connect_timeout, 2);
+        assert!(!test_opts.allocate_tty);
+        assert_eq!(test_opts.log_level, "ERROR");
+        assert!(test_opts.extra_options.is_empty());
+        assert!(test_opts.suppress_output);
+
+        // Test custom options
+        let mut custom_opts = SshConnectionOptions::default();
+        custom_opts.connect_timeout = 10;
+        custom_opts.allocate_tty = false;
+        custom_opts.log_level = "DEBUG".to_string();
+        custom_opts
+            .extra_options
+            .push(("ServerAliveInterval".to_string(), "30".to_string()));
+
+        assert_eq!(custom_opts.connect_timeout, 10);
+        assert!(!custom_opts.allocate_tty);
+        assert_eq!(custom_opts.log_level, "DEBUG");
+        assert_eq!(custom_opts.extra_options.len(), 1);
+        assert_eq!(
+            custom_opts.extra_options[0],
+            ("ServerAliveInterval".to_string(), "30".to_string())
+        );
     }
 }

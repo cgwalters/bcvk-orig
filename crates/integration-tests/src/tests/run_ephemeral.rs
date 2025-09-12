@@ -18,7 +18,7 @@ use std::process::Command;
 
 use tracing::debug;
 
-use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
+use crate::{get_bck_command, get_test_image, INTEGRATION_TEST_LABEL};
 
 pub fn get_container_kernel_version(image: &str) -> String {
     // Run container to get its kernel version
@@ -44,11 +44,11 @@ pub fn get_container_kernel_version(image: &str) -> String {
 }
 
 pub fn test_run_ephemeral_correct_kernel() {
-    const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
+    let image = get_test_image();
     let bck = get_bck_command().unwrap();
 
     // Get the kernel version from the container image
-    let container_kernel = get_container_kernel_version(IMAGE);
+    let container_kernel = get_container_kernel_version(&image);
     eprintln!("Container kernel version: {}", container_kernel);
 
     // Run the ephemeral VM with poweroff.target
@@ -63,7 +63,7 @@ pub fn test_run_ephemeral_correct_kernel() {
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
-            IMAGE,
+            &image,
             "--karg",
             "systemd.unit=poweroff.target",
         ])
@@ -101,7 +101,7 @@ pub fn test_run_ephemeral_poweroff() {
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
             "--karg",
             "systemd.unit=poweroff.target",
         ])
@@ -132,7 +132,7 @@ pub fn test_run_ephemeral_with_memory_limit() {
             "1024",
             "--karg",
             "systemd.unit=poweroff.target",
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
         ])
         .output()
         .expect("Failed to run bcvk run-ephemeral");
@@ -160,7 +160,7 @@ pub fn test_run_ephemeral_with_vcpus() {
             "2",
             "--karg",
             "systemd.unit=poweroff.target",
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
         ])
         .output()
         .expect("Failed to run bcvk run-ephemeral");
@@ -189,7 +189,7 @@ pub fn test_run_ephemeral_execute() {
             INTEGRATION_TEST_LABEL,
             "--execute",
             script,
-            "quay.io/fedora/fedora-bootc:42",
+            &get_test_image(),
         ])
         .output()
         .expect("Failed to run bcvk run-ephemeral with --execute");
@@ -231,7 +231,7 @@ pub fn test_run_ephemeral_execute() {
 }
 
 pub fn test_run_ephemeral_container_ssh_access() {
-    const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
+    let image = get_test_image();
     let bck = get_bck_command().unwrap();
 
     eprintln!("Testing container-based SSH access");
@@ -260,7 +260,7 @@ pub fn test_run_ephemeral_container_ssh_access() {
             "--detach",
             "--name",
             &container_name,
-            IMAGE,
+            &image,
         ])
         .output()
         .expect("Failed to start detached VM with SSH");
@@ -313,59 +313,4 @@ pub fn test_run_ephemeral_container_ssh_access() {
     // Check if SSH worked
     assert!(ssh_output.status.success());
     assert!(ssh_stdout.contains("SSH_TEST_SUCCESS"));
-}
-
-pub fn test_run_ephemeral_vsock_systemd_debugging() {
-    const IMAGE: &str = "quay.io/fedora/fedora-bootc:42";
-    let bck = get_bck_command().unwrap();
-
-    eprintln!("Testing AF_VSOCK systemd debugging in run-ephemeral");
-
-    // Start VM in detached mode to test AF_VSOCK debugging
-    let output = Command::new(&bck)
-        .args([
-            "run-ephemeral",
-            "--label",
-            INTEGRATION_TEST_LABEL,
-            "--detach",
-            IMAGE,
-        ])
-        .output()
-        .expect("Failed to start detached VM for vsock testing");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("Failed to start detached VM: {}", stderr);
-        return;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let cid = stdout.trim();
-    eprintln!("Detached VM started: {}", cid);
-
-    eprintln!("Polling for READY=1 in AF_VSOCK systemd debug log (60s timeout)...");
-    let start_time = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(60);
-    let mut found_ready = false;
-
-    while start_time.elapsed() < timeout {
-        let st = Command::new("podman")
-            .args([
-                "exec",
-                cid,
-                "grep",
-                "-q",
-                "READY=1",
-                "/run/systemd-guest.txt",
-            ])
-            .status()
-            .unwrap();
-        if st.success() {
-            found_ready = true;
-            break;
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-    assert!(found_ready);
 }
