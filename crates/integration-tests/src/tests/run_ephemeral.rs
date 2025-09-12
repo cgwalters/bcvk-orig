@@ -61,6 +61,7 @@ pub fn test_run_ephemeral_correct_kernel() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label",
             INTEGRATION_TEST_LABEL,
             IMAGE,
             "--karg",
@@ -98,6 +99,7 @@ pub fn test_run_ephemeral_poweroff() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "quay.io/fedora/fedora-bootc:42",
             "--karg",
@@ -124,6 +126,7 @@ pub fn test_run_ephemeral_with_memory_limit() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "--memory",
             "1024",
@@ -151,6 +154,7 @@ pub fn test_run_ephemeral_with_vcpus() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "--vcpus",
             "2",
@@ -181,6 +185,7 @@ pub fn test_run_ephemeral_execute() {
             &bck,
             "run-ephemeral",
             "--rm",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "--execute",
             script,
@@ -253,6 +258,7 @@ pub fn test_run_ephemeral_container_ssh_access() {
         .args([
             "run-ephemeral",
             "--ssh-keygen",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "--detach",
             "--name",
@@ -317,7 +323,13 @@ pub fn test_run_ephemeral_vsock_systemd_debugging() {
 
     // Start VM in detached mode to test AF_VSOCK debugging
     let output = Command::new(&bck)
-        .args(["run-ephemeral", INTEGRATION_TEST_LABEL, "--detach", IMAGE])
+        .args([
+            "run-ephemeral",
+            "--label",
+            INTEGRATION_TEST_LABEL,
+            "--detach",
+            IMAGE,
+        ])
         .output()
         .expect("Failed to start detached VM for vsock testing");
 

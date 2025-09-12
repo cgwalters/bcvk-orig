@@ -38,6 +38,7 @@ pub fn test_to_disk() {
             "600s", // 10 minute timeout for installation
             &bck,
             "to-disk",
+            "--label",
             INTEGRATION_TEST_LABEL,
             "quay.io/centos-bootc/centos-bootc:stream10",
             disk_path.to_str().unwrap(),
@@ -60,6 +61,9 @@ pub fn test_to_disk() {
         stdout,
         stderr
     );
+
+    let metadata = disk_path.metadata().expect("Failed to get disk metadata");
+    assert!(metadata.len() > 0);
 
     // Verify the disk has partitions using sfdisk -l
     println!("Verifying disk partitions with sfdisk -l");

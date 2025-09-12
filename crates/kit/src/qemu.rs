@@ -751,9 +751,6 @@ fn spawn(
         cmd.args(["-smbios", &format!("type=11,value={}", credential)]);
     }
 
-    // Debug: Print the actual command being executed
-    debug!("QEMU command: {:?}", cmd);
-
     // Configure stdio based on display mode
     match &config.display_mode {
         DisplayMode::Console => {

@@ -308,6 +308,40 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     return Err(cmd.exec()).context("execve");
 }
 
+/// Launch privileged container with QEMU+KVM for ephemeral VM and wait for completion.
+/// Unlike `run()`, this function waits for completion instead of using exec(), making it suitable
+/// for programmatic use where the caller needs to capture output and exit codes.
+pub fn run_synchronous(opts: RunEphemeralOpts) -> Result<()> {
+    let (mut cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
+    // Keep temp_dir alive until command completes
+
+    // Use the same approach as run_detached but wait for completion instead of detaching
+    let output = cmd.output().context("Failed to execute podman command")?;
+
+    // Forward the output to our stdout/stderr so it appears in logs and tests
+    if !output.stdout.is_empty() {
+        std::io::Write::write_all(&mut std::io::stdout(), &output.stdout)?;
+        std::io::Write::flush(&mut std::io::stdout())?;
+    }
+    if !output.stderr.is_empty() {
+        std::io::Write::write_all(&mut std::io::stderr(), &output.stderr)?;
+        std::io::Write::flush(&mut std::io::stderr())?;
+    }
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Podman command failed with exit code {:?}: {}",
+            output.status.code(),
+            stderr
+        ));
+    }
+
+    // Explicitly drop temp_dir after successful completion
+    drop(temp_dir);
+    Ok(())
+}
+
 fn prepare_run_command(opts: RunEphemeralOpts) -> Result<std::process::Command> {
     let (cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
     // Leak the tempdir to keep it alive for the entire process lifetime

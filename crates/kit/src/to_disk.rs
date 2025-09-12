@@ -74,7 +74,7 @@
 //! ```
 
 use crate::install_options::InstallOptions;
-use crate::run_ephemeral::{run as run_ephemeral, CommonVmOpts, RunEphemeralOpts};
+use crate::run_ephemeral::{run_synchronous as run_ephemeral, CommonVmOpts, RunEphemeralOpts};
 use crate::{images, utils};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};

@@ -7,7 +7,7 @@ use serde_json::Value;
 use xshell::{cmd, Shell};
 
 /// Label used to identify containers created by integration tests
-pub(crate) const INTEGRATION_TEST_LABEL: &str = "--label=bcvk.integration-test=1";
+pub(crate) const INTEGRATION_TEST_LABEL: &str = "bcvk.integration-test=1";
 
 /// Cleanup all containers with the integration test label
 pub(crate) fn cleanup_integration_test_containers() {
@@ -58,13 +58,13 @@ mod tests {
     pub mod to_disk;
 }
 
-/// Get the path to the bck binary, checking BCVK_PATH env var first, then falling back to "bck"
+/// Get the path to the bcvk binary, checking BCVK_PATH env var first, then falling back to "bcvk"
 pub(crate) fn get_bck_command() -> Result<String> {
     if let Some(path) = std::env::var("BCVK_PATH").ok() {
         return Ok(path);
     }
     // Force the user to set this if we're running from the project dir
-    if let Some(path) = ["target/debug/bck", "target/release/bck"]
+    if let Some(path) = ["target/debug/bcvk", "target/release/bcvk"]
         .into_iter()
         .find(|p| Path::new(p).exists())
     {
@@ -72,21 +72,21 @@ pub(crate) fn get_bck_command() -> Result<String> {
             "Detected {path} - set BCVK_PATH={path} to run using this binary"
         ));
     }
-    return Ok("bck".to_owned());
+    return Ok("bcvk".to_owned());
 }
 
 fn test_images_list() -> Result<()> {
-    println!("Running test: bck images list --json");
+    println!("Running test: bcvk images list --json");
 
     let sh = Shell::new()?;
     let bck = get_bck_command()?;
 
-    // Run the bck images list command with JSON output
+    // Run the bcvk images list command with JSON output
     let output = cmd!(sh, "{bck} images list --json").output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("Failed to run 'bck images list --json': {}", stderr));
+        return Err(eyre!("Failed to run 'bcvk images list --json': {}", stderr));
     }
 
     // Parse the JSON output
