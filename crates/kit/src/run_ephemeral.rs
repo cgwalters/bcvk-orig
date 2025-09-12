@@ -475,7 +475,7 @@ fn prepare_run_command_with_temp(
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
         // Since we run as init by default
-        "--stop-signal=SIGRTMIN+3",
+        "--stop-signal=SIGKILL",
         // And bind mount in the pristine image (without any mounts on top)
         // that we'll use as a mount source for virtiofs. Mount as rw for testing.
         &format!(
@@ -711,7 +711,7 @@ fn inject_systemd_units() -> Result<()> {
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
 /// generates systemd mount units, sets up command execution, launches QEMU.
 /// DEBUG_MODE=true drops to shell instead of QEMU.
-pub(crate) async fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
+pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
     use std::path::Path;
@@ -965,14 +965,22 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
     std::fs::create_dir_all(CONTAINER_STATEDIR)?;
 
+    // Configure qemu
+    let mut qemu_config = crate::qemu::QemuConfig::new_direct_boot(
+        opts.common.memory_mb()?,
+        opts.common.vcpus(),
+        "/run/qemu/kernel".to_string(),
+        "/run/qemu/initramfs".to_string(),
+        main_virtiofsd_config.socket_path.clone(),
+    );
+
     // Handle SSH key generation and credential injection
     if opts.common.ssh_keygen {
         let key_pair = crate::ssh::generate_default_keypair()?;
         // Create credential and add to kernel args
         let pubkey = std::fs::read_to_string(key_pair.public_key_path.as_path())?;
-        let credential = crate::sshcred::karg_for_root_ssh(&pubkey)?;
-        opts.common.kernel_args.push(credential);
-        debug!("Generated SSH key and added credential to kernel args");
+        let credential = crate::sshcred::smbios_cred_for_root_ssh(&pubkey)?;
+        qemu_config.add_smbios_credential(credential);
     }
     if debug_mode {
         debug!("=== DEBUG MODE: Dropping into bash shell ===");
@@ -1030,15 +1038,6 @@ StandardOutput=file:/dev/virtio-ports/executestatus
                 }
             }
         }
-
-        // Configure and start QEMU
-        let mut qemu_config = crate::qemu::QemuConfig::new_direct_boot(
-            opts.common.memory_mb()?,
-            opts.common.vcpus(),
-            "/run/qemu/kernel".to_string(),
-            "/run/qemu/initramfs".to_string(),
-            main_virtiofsd_config.socket_path.clone(),
-        );
 
         qemu_config
             .set_kernel_cmdline(kernel_cmdline)

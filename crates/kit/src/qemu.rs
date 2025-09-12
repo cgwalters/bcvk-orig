@@ -405,19 +405,6 @@ impl QemuConfig {
         self
     }
 
-    /// Add SSH credential for user
-    #[allow(dead_code)]
-    pub fn add_ssh_credential(&mut self, username: &str, public_key: &str) -> Result<&mut Self> {
-        let credential = if username == "root" {
-            crate::sshcred::smbios_cred_for_root_ssh(public_key)?
-        } else {
-            // For future extension to support non-root users
-            return Err(eyre!("Non-root SSH users not yet supported"));
-        };
-        self.add_smbios_credential(credential);
-        Ok(self)
-    }
-
     /// Enable SSH access by configuring port forwarding
     pub fn enable_ssh_access(&mut self, host_port: Option<u16>) -> &mut Self {
         let port = host_port.unwrap_or(2222); // Default to port 2222 on host
