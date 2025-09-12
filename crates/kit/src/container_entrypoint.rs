@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use color_eyre::Result;
 use serde::{Deserialize, Serialize};
+use tokio::signal::unix::SignalKind;
 use tracing::debug;
 
 use crate::run_ephemeral::RunEphemeralOpts;
@@ -78,8 +79,19 @@ pub fn ssh_to_vm(opts: SshOpts) -> Result<()> {
 }
 
 pub async fn run(opts: ContainerEntrypointOpts) -> Result<()> {
-    match opts.command {
-        ContainerCommands::RunEphemeral => run_ephemeral_in_container().await,
-        ContainerCommands::Ssh(ssh_opts) => ssh_to_vm(ssh_opts),
+    let mut term = tokio::signal::unix::signal(SignalKind::from_raw(libc::SIGRTMIN() + 3))?;
+
+    tokio::select! {
+        _ = term.recv() => {
+            std::process::exit(0)
+        }
+        r = async {
+            match opts.command {
+                ContainerCommands::RunEphemeral => run_ephemeral_in_container().await,
+                ContainerCommands::Ssh(ssh_opts) => {
+                    tokio::task::spawn_blocking(move || ssh_to_vm(ssh_opts)).await?
+                }
+            }
+        } => r
     }
 }

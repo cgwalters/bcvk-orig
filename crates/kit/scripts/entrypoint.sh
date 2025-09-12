@@ -44,4 +44,4 @@ if [[ $# -eq 0 ]]; then
 fi
 
 # Execute with proper environment passing
-exec bwrap "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@"
+exec bwrap --as-pid-1 "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@"

@@ -474,6 +474,8 @@ fn prepare_run_command_with_temp(
         &format!("{}:{}", entrypoint_path, ENTRYPOINT),
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
+        // Since we run as init by default
+        "--stop-signal=SIGRTMIN+3",
         // And bind mount in the pristine image (without any mounts on top)
         // that we'll use as a mount source for virtiofs. Mount as rw for testing.
         &format!(
