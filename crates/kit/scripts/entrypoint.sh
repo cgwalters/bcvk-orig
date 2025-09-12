@@ -43,5 +43,8 @@ if [[ $# -eq 0 ]]; then
     set -- "run-ephemeral"
 fi
 
+# Gather information about the target environment
+export SYSTEMD_VERSION=$(systemctl --version)
+
 # Execute with proper environment passing
 exec bwrap --as-pid-1 --unshare-pid "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@"

@@ -506,7 +506,9 @@ fn prepare_run_command_with_temp(
     }
 
     // Propagate this by default
-    cmd.arg("--env=RUST_LOG");
+    if let Some(log) = std::env::var("RUST_LOG").ok() {
+        cmd.arg(format!("--env=RUST_LOG={log}"));
+    }
 
     // Set debug mode environment variable if requested
     if opts.common.debug {
@@ -719,7 +721,10 @@ pub(crate) async fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
     // Check if we're in debug mode
     let debug_mode = std::env::var("DEBUG_MODE").unwrap_or_default() == "true";
 
-    let systemd_version = systemd::SystemdVersion::new_current()?;
+    let systemd_version = {
+        let v = std::env::var("SYSTEMD_VERSION")?;
+        systemd::SystemdVersion::from_version_output(&v)?
+    };
 
     // Find kernel and initramfs from the container image (not the host)
     let modules_dir = Path::new("/run/source-image/usr/lib/modules");

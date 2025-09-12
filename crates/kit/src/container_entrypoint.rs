@@ -83,6 +83,7 @@ pub async fn run(opts: ContainerEntrypointOpts) -> Result<()> {
 
     tokio::select! {
         _ = term.recv() => {
+            debug!("Caught SIGRTMIN+3");
             std::process::exit(0)
         }
         r = async {

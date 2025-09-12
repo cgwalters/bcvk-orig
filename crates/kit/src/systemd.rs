@@ -23,6 +23,7 @@ impl SystemdVersion {
         Ok(Self(num))
     }
 
+    #[allow(dead_code)]
     pub fn new_current() -> Result<Self> {
         let o = Command::new("systemctl").arg("--version").output()?;
         let o = String::from_utf8_lossy(&o.stdout);
