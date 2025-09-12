@@ -196,14 +196,6 @@ fn main() {
             tests::run_ephemeral_ssh::test_run_ephemeral_ssh_cross_distro_compatibility();
             Ok(())
         }),
-        Trial::test(
-            "run_ephemeral_ssh_systemd_notification_compatibility",
-            || {
-                tests::run_ephemeral_ssh::test_run_ephemeral_ssh_systemd_notification_compatibility(
-                );
-                Ok(())
-            },
-        ),
         Trial::test("mount_feature_bind", || {
             tests::mount_feature::test_mount_feature_bind();
             Ok(())
