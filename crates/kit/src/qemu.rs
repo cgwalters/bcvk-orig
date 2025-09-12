@@ -8,7 +8,6 @@ use std::io::ErrorKind;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use cap_std_ext::cmdext::CapStdExtCommandExt;
@@ -132,7 +131,7 @@ impl ProcessCleanupGuard {
             }
 
             // Wait a bit for graceful shutdown
-            thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(100));
 
             // Check if process terminated
             match process.try_wait() {
@@ -784,7 +783,7 @@ pub struct RunningQemu {
 
 impl RunningQemu {
     /// Spawn QEMU with optional AF_VSOCK debugging enabled
-    pub fn spawn(mut config: QemuConfig) -> Result<Self> {
+    pub async fn spawn(mut config: QemuConfig) -> Result<Self> {
         let vsockdata = if !config.disable_vsock {
             // Get a unique guest CID using dynamic allocation
             Some(allocate_vsock_cid()?)
@@ -887,15 +886,22 @@ impl RunningQemu {
     }
 
     /// Wait for QEMU process to exit
-    pub fn wait(&mut self) -> Result<std::process::ExitStatus> {
-        let status = self
-            .qemu_process
-            .wait()
-            .context("Failed to wait for QEMU process")?;
-        // TODO eventually use async for this
-        let _ = self.sd_notification.take();
-
-        Ok(status)
+    pub async fn wait(&mut self) -> Result<std::process::ExitStatus> {
+        // Use polling to wait for process completion asynchronously
+        loop {
+            match self.qemu_process.try_wait() {
+                Ok(Some(status)) => {
+                    // Clean up the notification thread
+                    let _ = self.sd_notification.take();
+                    return Ok(status);
+                }
+                Ok(None) => {
+                    // Process still running, wait a bit
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 }
 
@@ -961,7 +967,7 @@ mod tests {
 
 /// VirtiofsD daemon configuration.
 /// Cache modes: always(default)/auto/none. Sandbox: none(default)/namespace/chroot.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VirtiofsConfig {
     /// Unix socket for QEMU communication
     pub socket_path: String,
@@ -1047,7 +1053,7 @@ pub fn spawn_virtiofsd(config: &VirtiofsConfig) -> Result<Child> {
 
 /// Wait for virtiofsd socket to become available.
 /// Polls every 100ms until socket exists or timeout.
-pub fn wait_for_virtiofsd_socket(socket_path: &str, timeout: Duration) -> Result<()> {
+pub async fn wait_for_virtiofsd_socket(socket_path: &str, timeout: Duration) -> Result<()> {
     let start = std::time::Instant::now();
 
     while start.elapsed() < timeout {
@@ -1055,7 +1061,7 @@ pub fn wait_for_virtiofsd_socket(socket_path: &str, timeout: Duration) -> Result
             debug!("Virtiofsd socket ready: {}", socket_path);
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     Err(eyre!(

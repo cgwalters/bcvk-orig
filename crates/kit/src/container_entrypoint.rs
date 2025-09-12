@@ -37,13 +37,13 @@ pub struct ContainerConfig {
     // Future: SSH config, etc.
 }
 
-pub fn run_ephemeral_in_container() -> Result<()> {
+pub async fn run_ephemeral_in_container() -> Result<()> {
     // Parse BCK_CONFIG from environment
     let config_json = std::env::var("BCK_CONFIG")?;
     let opts: RunEphemeralOpts = serde_json::from_str(&config_json)?;
 
     // Call existing run_impl
-    crate::run_ephemeral::run_impl(opts)
+    crate::run_ephemeral::run_impl(opts).await
 }
 
 pub fn ssh_to_vm(opts: SshOpts) -> Result<()> {
@@ -77,9 +77,9 @@ pub fn ssh_to_vm(opts: SshOpts) -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-pub fn run(opts: ContainerEntrypointOpts) -> Result<()> {
+pub async fn run(opts: ContainerEntrypointOpts) -> Result<()> {
     match opts.command {
-        ContainerCommands::RunEphemeral => run_ephemeral_in_container(),
+        ContainerCommands::RunEphemeral => run_ephemeral_in_container().await,
         ContainerCommands::Ssh(ssh_opts) => ssh_to_vm(ssh_opts),
     }
 }

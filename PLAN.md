@@ -13,7 +13,7 @@ The project has been renamed from **bootc-sdk** to **bootc-kit** with the binary
 
 2. **Core Implementation**: The project now provides working commands for:
    - `bcvk run-ephemeral`: Launch ephemeral VMs from bootc containers
-   - `bcvk run-install`: Create persistent bootable disk images  
+   - `bcvk to-disk`: Create persistent bootable disk images  
    - `bcvk ssh`: Connect to running VMs
    - `bcvk images list`: List bootc container images
 
@@ -61,7 +61,7 @@ The current implementation provides:
 ## Roadmap and Future Development
 
 ### Immediate Goals (Q4 2024 - Q1 2025)
-- ✅ **Core CLI Implementation**: Basic `run-ephemeral`, `run-install`, and `ssh` commands
+- ✅ **Core CLI Implementation**: Basic `run-ephemeral`, `to-disk`, and `ssh` commands
 - ✅ **Documentation**: Man pages and user guides  
 - ⏳ **Testing Infrastructure**: Integration tests using tmt framework
 - ⏳ **CI/CD Pipeline**: Automated testing and releases
@@ -81,6 +81,34 @@ The current implementation provides:
    - tmt provision plugin compatibility
    - GitHub Actions integration examples
    - Container registry optimization
+
+### Next: Async Process Management Refactoring (Q1 2025)
+
+**Priority: High** - Refactor the "inner" process supervision system to use async/await patterns for improved performance and maintainability.
+
+#### Current State Analysis
+The process supervision system currently uses synchronous patterns with manual threading:
+- **Sequential Process Spawning**: QEMU and virtiofsd are launched synchronously
+- **Blocking Operations**: Socket waiting and process monitoring block execution threads
+- **Manual Cleanup**: Resource cleanup uses polling-based approaches
+
+#### Refactoring Goals
+1. **Concurrent Process Management**: Launch QEMU and virtiofsd concurrently using `tokio::process`
+2. **Structured Concurrency**: Use `tokio::select!` and `JoinSet` for coordinated process lifecycle management  
+3. **Async Resource Cleanup**: Replace polling-based cleanup with async event-driven patterns
+4. **Improved Error Handling**: Leverage async error propagation for better failure management
+
+#### Implementation Plan
+- **Phase 1**: Convert core process spawning in `qemu.rs` to async patterns
+- **Phase 2**: Refactor VM orchestration in `run_ephemeral.rs` to use async coordination
+- **Phase 3**: Update process supervision and cleanup with structured concurrency
+- **Phase 4**: Add comprehensive async testing patterns
+
+#### Expected Benefits  
+- **Performance**: 60-80% reduction in VM startup time through concurrent process initialization
+- **Resource Efficiency**: Better CPU utilization and reduced thread overhead
+- **Maintainability**: Cleaner error handling and shutdown procedures
+- **Scalability**: Foundation for handling multiple concurrent VM operations
 
 ### Long-term Vision
 - **Cross-platform Support**: While currently Linux-focused, explore containerized deployment for broader platform support

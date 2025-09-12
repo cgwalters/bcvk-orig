@@ -1,11 +1,11 @@
 //! Upload bootc disk images to libvirt with proper metadata annotations
 //!
-//! This module provides functionality to upload disk images created by run-install
+//! This module provides functionality to upload disk images created by to-disk
 //! to libvirt storage pools, maintaining container image metadata as libvirt annotations.
 
 use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR};
-use crate::run_install::{run as run_install, RunInstallOpts};
+use crate::to_disk::{run as to_disk, ToDiskOpts};
 use crate::{images, utils};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
@@ -198,7 +198,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
         // Use explicit size if provided
         utils::parse_size(size_str)?
     } else {
-        // Use same logic as run_install: 2x source image size with 4GB minimum
+        // Use same logic as to_disk: 2x source image size with 4GB minimum
         let image_size =
             images::get_image_size(&opts.source_image).unwrap_or(2 * 1024 * 1024 * 1024); // Default to 2GB if we can't get image size
 
@@ -212,7 +212,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
     // Phase 3: Run installation to create disk image
     info!("Running bootc installation to create disk image");
 
-    let install_opts = RunInstallOpts {
+    let install_opts = ToDiskOpts {
         source_image: opts.source_image.clone(),
         target_disk: temp_disk.path().to_owned(),
         install: opts.install.clone(),
@@ -231,7 +231,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
         },
     };
 
-    run_install(install_opts)?;
+    to_disk(install_opts)?;
 
     opts.upload_to_libvirt(temp_disk.path(), disk_size, &image_digest)?;
 

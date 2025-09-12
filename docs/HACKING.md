@@ -27,7 +27,7 @@ just test-integration-single <test_name>
 
 # Examples:
 just test-integration-single run_ephemeral_with_storage
-just test-integration-single run_install_to_disk
+just test-integration-single to_disk
 ```
 
 Integration tests require QEMU/KVM to be fully working as they launch actual VMs.

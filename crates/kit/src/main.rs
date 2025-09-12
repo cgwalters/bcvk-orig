@@ -19,10 +19,10 @@ mod podman;
 mod qemu;
 mod run_ephemeral;
 mod run_ephemeral_ssh;
-mod run_install;
 mod ssh;
 #[allow(dead_code)]
 mod sshcred;
+mod to_disk;
 mod utils;
 
 pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
@@ -143,8 +143,8 @@ enum Commands {
     /// using ephemeral VMs as the installation environment. Supports multiple
     /// filesystems, custom sizing, and creates bootable disk images ready
     /// for production deployment.
-    #[clap(name = "run-install")]
-    RunInstall(run_install::RunInstallOpts),
+    #[clap(name = "to-disk")]
+    ToDisk(to_disk::ToDiskOpts),
 
     /// Manage libvirt integration for bootc containers
     ///
@@ -227,8 +227,8 @@ fn main() -> Result<(), Report> {
         Commands::RunEphemeralSsh(opts) => {
             run_ephemeral_ssh::run_ephemeral_ssh(opts)?;
         }
-        Commands::RunInstall(opts) => {
-            run_install::run(opts)?;
+        Commands::ToDisk(opts) => {
+            to_disk::run(opts)?;
         }
         Commands::Libvirt(cmd) => {
             cmd.run()?;
@@ -249,7 +249,11 @@ fn main() -> Result<(), Report> {
                 opts.args,
             )?;
         }
-        Commands::ContainerEntrypoint(opts) => container_entrypoint::run(opts)?,
+        Commands::ContainerEntrypoint(opts) => {
+            // Create a tokio runtime for async container entrypoint operations
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(container_entrypoint::run(opts))?;
+        }
         Commands::DebugInternals(opts) => match opts.command {
             DebugInternalsCmds::OpenTree { path } => {
                 let fd = rustix::mount::open_tree(

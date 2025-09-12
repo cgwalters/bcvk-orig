@@ -55,7 +55,7 @@ mod tests {
     pub mod mount_feature;
     pub mod run_ephemeral;
     pub mod run_ephemeral_ssh;
-    pub mod run_install;
+    pub mod to_disk;
 }
 
 /// Get the path to the bck binary, checking BCVK_PATH env var first, then falling back to "bck"
@@ -177,8 +177,8 @@ fn main() {
             tests::mount_feature::test_mount_feature_ro_bind();
             Ok(())
         }),
-        Trial::test("run_install_to_disk", || {
-            tests::run_install::test_run_install_to_disk();
+        Trial::test("to_disk", || {
+            tests::to_disk::test_to_disk();
             Ok(())
         }),
         Trial::test("libvirt_list_functionality", || {

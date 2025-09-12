@@ -42,7 +42,7 @@ bcvk-run-ephemeral(8)
 
 :   Run bootc containers as temporary VMs for testing and development
 
-bcvk-run-install(8)
+bcvk-to-disk(8)
 
 :   Install bootc images to persistent disk images
 

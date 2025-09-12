@@ -1,10 +1,10 @@
 # NAME
 
-bcvk-run-install - Install bootc images to persistent disk images
+bcvk-to-disk - Install bootc images to persistent disk images
 
 # SYNOPSIS
 
-**bcvk run-install** \[**-h**\|**\--help**\] \[*OPTIONS*\] *IMAGE*
+**bcvk to-disk** \[**-h**\|**\--help**\] \[*OPTIONS*\] *IMAGE*
 
 # DESCRIPTION
 
@@ -119,11 +119,11 @@ The installation process:
 
 Install a bootc image to a disk image:
 
-    bcvk run-install quay.io/example/my-bootc:latest
+    bcvk to-disk quay.io/example/my-bootc:latest
 
 Install with custom output path and filesystem:
 
-    bcvk run-install --output /path/to/disk.img --filesystem btrfs registry.example.com/bootc:prod
+    bcvk to-disk --output /path/to/disk.img --filesystem btrfs registry.example.com/bootc:prod
 
 # VERSION
 

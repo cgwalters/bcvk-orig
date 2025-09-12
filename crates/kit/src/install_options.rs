@@ -1,7 +1,7 @@
 //! Common installation options shared across bcvk commands
 //!
 //! This module provides shared configuration structures for disk installation
-//! operations, ensuring consistency across run-install, libvirt-upload-disk,
+//! operations, ensuring consistency across to-disk, libvirt-upload-disk,
 //! and other installation-related commands.
 
 use clap::Parser;

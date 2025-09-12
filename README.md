@@ -23,7 +23,7 @@ bcvk ssh mytestvm
 ### Creating a persistent bootable disk image from a container image
 ```bash
 # Install bootc image to disk
-bcvk run-install quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
+bcvk to-disk quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
 ```
 
 ### Image management

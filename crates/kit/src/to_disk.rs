@@ -66,10 +66,10 @@
 //!
 //! ```bash
 //! # Basic installation with defaults
-//! bcvk run-install quay.io/centos-bootc/centos-bootc:stream10 output.img
+//! bcvk to-disk quay.io/centos-bootc/centos-bootc:stream10 output.img
 //!
 //! # Custom filesystem and size
-//! bcvk run-install --filesystem xfs --root-size 20G \
+//! bcvk to-disk --filesystem xfs --root-size 20G \
 //!     quay.io/centos-bootc/centos-bootc:stream10 output.img
 //! ```
 
@@ -86,7 +86,7 @@ use tracing::debug;
 ///
 /// See the module-level documentation for details on the installation architecture and workflow.
 #[derive(Debug, Parser)]
-pub struct RunInstallOpts {
+pub struct ToDiskOpts {
     /// Container image to install
     pub source_image: String,
 
@@ -112,7 +112,7 @@ pub struct RunInstallOpts {
     pub label: Vec<String>,
 }
 
-impl RunInstallOpts {
+impl ToDiskOpts {
     /// Get the container image to use as the installation environment
     ///
     /// Uses the source image itself as the installer environment.
@@ -126,7 +126,7 @@ impl RunInstallOpts {
     fn get_storage_path(&self) -> Result<PathBuf> {
         if let Some(ref path) = self.install.storage_path {
             utils::validate_container_storage_path(path)?;
-            Ok(path.clone())
+            Ok(path.to_path_buf())
         } else {
             utils::detect_container_storage_path()
         }
@@ -221,7 +221,7 @@ impl RunInstallOpts {
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
-pub fn run(opts: RunInstallOpts) -> Result<()> {
+pub fn run(opts: ToDiskOpts) -> Result<()> {
     // Phase 1: Validation and preparation
     // Ensure target disk path is valid and create parent directories if needed
     opts.prepare_target_disk()?;

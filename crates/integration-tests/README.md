@@ -6,7 +6,7 @@ This crate contains comprehensive integration tests for bcvk functionality.
 
 ### Core Tests
 - `run_ephemeral.rs` - Tests ephemeral VM functionality with various configurations
-- `run_install.rs` - Tests installation workflows and disk operations
+- `to_disk.rs` - Tests installation workflows and disk operations
 - `mount_feature.rs` - Tests virtiofs mount features (bind, ro-bind, multiple mounts)
 - `bootc_install_workflow.rs` - Tests bootc installation workflow components
 

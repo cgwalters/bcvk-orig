@@ -1,4 +1,4 @@
-//! Integration tests for run-install command
+//! Integration tests for to-disk command
 //!
 //! ⚠️  **CRITICAL INTEGRATION TEST POLICY** ⚠️
 //!
@@ -20,7 +20,7 @@ use tempfile::TempDir;
 use crate::{get_bck_command, INTEGRATION_TEST_LABEL};
 
 /// Test actual bootc installation to a disk image
-pub fn test_run_install_to_disk() {
+pub fn test_to_disk() {
     let bck = get_bck_command().unwrap();
 
     // Create a temporary disk image file
@@ -37,13 +37,13 @@ pub fn test_run_install_to_disk() {
         .args([
             "600s", // 10 minute timeout for installation
             &bck,
-            "run-install",
+            "to-disk",
             INTEGRATION_TEST_LABEL,
             "quay.io/centos-bootc/centos-bootc:stream10",
             disk_path.to_str().unwrap(),
         ])
         .output()
-        .expect("Failed to run bcvk run-install");
+        .expect("Failed to run bcvk to-disk");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -55,7 +55,7 @@ pub fn test_run_install_to_disk() {
     // Check that the command completed successfully
     assert!(
         output.status.success(),
-        "run-install failed with exit code: {:?}. stdout: {}, stderr: {}",
+        "to-disk failed with exit code: {:?}. stdout: {}, stderr: {}",
         output.status.code(),
         stdout,
         stderr

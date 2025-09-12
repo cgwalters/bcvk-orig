@@ -119,7 +119,8 @@ pub fn default_vcpus() -> u32 {
 }
 
 use crate::{podman, utils, CONTAINER_STATEDIR};
-use std::process::Child;
+use std::time::Duration;
+use tokio::task::JoinSet;
 
 /// Common container lifecycle options for podman commands.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
@@ -282,7 +283,10 @@ pub struct RunEphemeralOpts {
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
 /// Returns the container ID instead of executing the command.
 pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
-    let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+    let (mut cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
+
+    // Leak the tempdir to keep it alive for the entire container lifetime
+    std::mem::forget(temp_dir);
 
     let output = cmd.output().context("Failed to execute podman command")?;
     if !output.status.success() {
@@ -297,14 +301,17 @@ pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
-    let mut cmd = prepare_run_command(opts)?;
+    let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+    // Keep _temp_dir alive until exec replaces our process
     // At this point our process is replaced by `podman`, we are just a wrapper for creating
     // a container image and nothing else lives past that event.
     return Err(cmd.exec()).context("execve");
 }
 
 fn prepare_run_command(opts: RunEphemeralOpts) -> Result<std::process::Command> {
-    let (cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+    let (cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
+    // Leak the tempdir to keep it alive for the entire process lifetime
+    std::mem::forget(temp_dir);
     Ok(cmd)
 }
 
@@ -675,7 +682,58 @@ fn inject_systemd_units() -> Result<()> {
 
 /// RAII guard for automatic virtiofsd process cleanup on drop.
 struct VirtiofsdCleanupGuard {
-    processes: Vec<Child>,
+    processes: Vec<std::process::Child>,
+}
+
+/// Async manager for virtiofsd processes using structured concurrency.
+struct AsyncVirtiofsdManager {
+    join_set: JoinSet<Result<std::process::ExitStatus>>,
+}
+
+impl AsyncVirtiofsdManager {
+    fn new() -> Self {
+        Self {
+            join_set: JoinSet::new(),
+        }
+    }
+
+    /// Spawn a virtiofsd process and add it to the managed set
+    async fn spawn_virtiofsd(&mut self, config: crate::qemu::VirtiofsConfig) -> Result<()> {
+        let mut process = crate::qemu::spawn_virtiofsd(&config)?;
+
+        // Spawn a task to wait for this process
+        self.join_set.spawn(async move {
+            // Convert std::process::Child to async waiting
+            loop {
+                match process.try_wait() {
+                    Ok(Some(status)) => return Ok(status),
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(e) => return Err(eyre!("Virtiofsd process wait error: {}", e)),
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Wait for any virtiofsd process to complete (useful for monitoring failures)
+    async fn wait_any(
+        &mut self,
+    ) -> Option<Result<Result<std::process::ExitStatus>, tokio::task::JoinError>> {
+        self.join_set.join_next().await
+    }
+
+    /// Shutdown all virtiofsd processes
+    async fn shutdown_all(&mut self) {
+        self.join_set.shutdown().await;
+    }
+
+    /// Check if any processes are still running
+    fn is_empty(&self) -> bool {
+        self.join_set.is_empty()
+    }
 }
 
 impl VirtiofsdCleanupGuard {
@@ -686,7 +744,7 @@ impl VirtiofsdCleanupGuard {
     }
 
     /// Add virtiofsd process for cleanup tracking
-    fn add(&mut self, process: Child) {
+    fn add(&mut self, process: std::process::Child) {
         self.processes.push(process);
     }
 
@@ -704,14 +762,19 @@ impl VirtiofsdCleanupGuard {
 impl Drop for VirtiofsdCleanupGuard {
     fn drop(&mut self) {
         debug!("Cleaning up {} virtiofsd processes", self.processes.len());
-        self.cleanup_all();
+        // Note: Drop trait cannot be async, so we do synchronous cleanup
+        // In practice, callers should call cleanup_all() explicitly before drop
+        for process in &mut self.processes {
+            let _ = process.kill();
+        }
+        self.processes.clear();
     }
 }
 
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
 /// generates systemd mount units, sets up command execution, launches QEMU.
 /// DEBUG_MODE=true drops to shell instead of QEMU.
-pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
+pub(crate) async fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
     use std::path::Path;
@@ -788,8 +851,9 @@ pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
         return Err(eyre!("Failed to bind mount initramfs"));
     }
 
-    // Process host mounts and prepare virtiofsd instances for each
-    let mut cleanup_guard = VirtiofsdCleanupGuard::new();
+    // Process host mounts and prepare virtiofsd instances for each using async manager
+    let _cleanup_guard = VirtiofsdCleanupGuard::new();
+    let mut virtiofsd_manager = AsyncVirtiofsdManager::new();
     let mut additional_mounts = Vec::new();
 
     debug!(
@@ -825,7 +889,7 @@ pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
             let socket_path = format!("/run/inner-shared/virtiofs-{}.sock", mount_name_str);
             let tag = format!("mount_{}", mount_name_str);
 
-            // Spawn virtiofsd for this mount
+            // Spawn virtiofsd for this mount using async manager
             let virtiofsd_config = qemu::VirtiofsConfig {
                 socket_path: socket_path.clone(),
                 shared_dir: source_path.to_string_lossy().to_string(),
@@ -833,11 +897,10 @@ pub(crate) fn run_impl(mut opts: RunEphemeralOpts) -> Result<()> {
                 sandbox: "none".to_string(),
                 debug: debug_mode,
             };
-            let virtiofsd_instance = qemu::spawn_virtiofsd(&virtiofsd_config)?;
-            cleanup_guard.add(virtiofsd_instance);
+            virtiofsd_manager.spawn_virtiofsd(virtiofsd_config).await?;
 
             // Wait for this virtiofsd socket to be ready
-            qemu::wait_for_virtiofsd_socket(&socket_path, Duration::from_secs(10))?;
+            qemu::wait_for_virtiofsd_socket(&socket_path, Duration::from_secs(10)).await?;
 
             // Add to QEMU mounts
             additional_mounts.push(crate::qemu::VirtiofsMount {
@@ -966,15 +1029,16 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     // Also inject if we created mount units that need to be copied
     inject_systemd_units()?;
 
-    // Start virtiofsd in background using the source image directly
-    // If we have host mounts, we'll need QEMU to mount them separately
-    let mut virtiofsd_config = qemu::VirtiofsConfig::default();
-    virtiofsd_config.debug = debug_mode;
-    let virtiofsd = qemu::spawn_virtiofsd(&virtiofsd_config)?;
-    cleanup_guard.add(virtiofsd);
+    // Start main virtiofsd using async manager for the source image
+    let mut main_virtiofsd_config = qemu::VirtiofsConfig::default();
+    main_virtiofsd_config.debug = debug_mode;
+    virtiofsd_manager
+        .spawn_virtiofsd(main_virtiofsd_config.clone())
+        .await?;
 
     // Wait for socket to be created with proper checking
-    qemu::wait_for_virtiofsd_socket(&virtiofsd_config.socket_path, Duration::from_secs(10))?;
+    qemu::wait_for_virtiofsd_socket(&main_virtiofsd_config.socket_path, Duration::from_secs(10))
+        .await?;
 
     std::fs::create_dir_all(CONTAINER_STATEDIR)?;
 
@@ -1050,7 +1114,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             opts.common.vcpus(),
             "/run/qemu/kernel".to_string(),
             "/run/qemu/initramfs".to_string(),
-            virtiofsd_config.socket_path.clone(),
+            main_virtiofsd_config.socket_path.clone(),
         );
 
         qemu_config
@@ -1090,156 +1154,303 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
         debug!("Starting QEMU with systemd debugging enabled");
 
-        // Handle --execute output streaming if needed
-        if !opts.common.execute.is_empty() {
-            // Find the execute output files that were passed via BOOTC_VIRTIO_SERIAL
-            let mut execute_output_file = None;
-            let mut execute_status_file = None;
-
-            for serial_device in &virtio_serial_devices {
-                if serial_device.name == "execute" {
-                    execute_output_file = Some(serial_device.output_file.clone());
-                } else if serial_device.name == "executestatus" {
-                    execute_status_file = Some(serial_device.output_file.clone());
-                }
-            }
-
-            if let Some(output_file) = execute_output_file {
-                use std::io::{BufRead, BufReader, Seek, SeekFrom};
-                use std::sync::atomic::{AtomicBool, Ordering};
-                use std::sync::Arc;
-                use std::thread;
-                use std::time::Duration;
-
-                debug!("Starting QEMU with real-time output streaming for execute commands");
-
-                // Spawn QEMU in background
-                let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
-
-                // Set up output streaming thread
-                let output_file_path = output_file.clone();
-                let finished = Arc::new(AtomicBool::new(false));
-                let finished_clone = finished.clone();
-
-                let output_thread = thread::spawn(move || {
-                    let mut file_position = 0u64;
-                    let mut last_size = 0u64;
-                    let mut creation_timeout = 0;
-                    const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
-
-                    // Wait for the file to be populated
-                    while creation_timeout < MAX_CREATION_TIMEOUT
-                        && !finished_clone.load(Ordering::Relaxed)
-                    {
-                        if let Ok(metadata) = std::fs::metadata(&output_file_path) {
-                            if metadata.len() > 0 {
-                                break;
-                            }
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                        creation_timeout += 1;
-                    }
-
-                    if creation_timeout >= MAX_CREATION_TIMEOUT {
-                        debug!(
-                            "Output file content timeout after {}ms",
-                            MAX_CREATION_TIMEOUT * 100
-                        );
-                        return;
-                    }
-
-                    debug!("Output streaming started");
-
-                    loop {
-                        if let Ok(metadata) = std::fs::metadata(&output_file_path) {
-                            let current_size = metadata.len();
-                            if current_size > last_size {
-                                if let Ok(mut file) = File::open(&output_file_path) {
-                                    if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
-                                        let reader = BufReader::new(file);
-                                        let mut bytes_read = 0u64;
-
-                                        for line in reader.lines() {
-                                            if let Ok(line) = line {
-                                                println!("{}", line);
-                                                std::io::Write::flush(&mut std::io::stdout()).ok();
-                                                bytes_read += line.as_bytes().len() as u64 + 1;
-                                            }
-                                        }
-
-                                        file_position += bytes_read;
-                                    }
-                                    last_size = current_size;
-                                }
-                            }
-                        }
-
-                        // Check if we should exit
-                        if finished_clone.load(Ordering::Relaxed) {
-                            // Read any remaining output
-                            if let Ok(mut file) = File::open(&output_file_path) {
-                                if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
-                                    let reader = BufReader::new(file);
-                                    for line in reader.lines() {
-                                        if let Ok(line) = line {
-                                            println!("{}", line);
-                                            std::io::Write::flush(&mut std::io::stdout()).ok();
-                                        }
-                                    }
-                                }
-                            }
-                            break;
-                        }
-
-                        thread::sleep(Duration::from_millis(100));
-                    }
-
-                    debug!("Output streaming thread finished");
-                });
-
-                // Wait for QEMU to complete
-                qemu.wait()?;
-
-                // Signal the output thread to finish
-                finished.store(true, Ordering::Relaxed);
-
-                // Wait for the output thread to finish
-                let _ = output_thread.join();
-
-                // Check for execute status
-                if let Some(status_file) = execute_status_file {
-                    debug!("Checking for execute status file: {}", status_file);
-                    if std::path::Path::new(&status_file).exists() {
-                        debug!("Status file exists, reading content");
-                        let r = std::fs::read_to_string(&status_file)?;
-                        for line in r.lines() {
-                            if let Some(codeval) = line.strip_prefix("ExecMainStatus=") {
-                                let exit_code: i32 =
-                                    codeval.parse().context("Parsing ExecMainStatus")?;
-                                if exit_code != 0 {
-                                    return Err(eyre!(
-                                        "Execute command failed with exit code: {}",
-                                        exit_code
-                                    ));
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // No execute output file but commands were specified
-                let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
-                qemu.wait()?;
-            }
-        } else {
-            // No execute commands, run normally
-            let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config)?;
-            qemu.wait()?;
-        }
+        // Use structured concurrency to coordinate QEMU and virtiofsd processes
+        run_qemu_with_virtiofsd_coordination(
+            qemu_config,
+            &mut virtiofsd_manager,
+            &opts.common.execute,
+        )
+        .await?;
 
         debug!("QEMU completed successfully");
+
+        return Ok(());
     } // Close the else block
+
+    Ok(())
+}
+
+/// Run QEMU with structured concurrency coordination of virtiofsd processes
+async fn run_qemu_with_virtiofsd_coordination(
+    qemu_config: crate::qemu::QemuConfig,
+    virtiofsd_manager: &mut AsyncVirtiofsdManager,
+    execute_commands: &[String],
+) -> Result<()> {
+    use tokio::select;
+
+    // Handle --execute output streaming if needed
+    if !execute_commands.is_empty() {
+        // Parse virtio-serial-out arguments from environment variable
+        let mut virtio_serial_devices = Vec::new();
+        if let Ok(serial_env) = std::env::var("BOOTC_VIRTIO_SERIAL") {
+            for serial_spec in serial_env.split(',') {
+                if let Some((name, output_file)) = serial_spec.split_once(':') {
+                    virtio_serial_devices.push(crate::qemu::VirtioSerialOut {
+                        name: name.to_string(),
+                        output_file: output_file.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Find the execute output files
+        let mut execute_output_file = None;
+        let mut execute_status_file = None;
+
+        for serial_device in &virtio_serial_devices {
+            if serial_device.name == "execute" {
+                execute_output_file = Some(serial_device.output_file.clone());
+            } else if serial_device.name == "executestatus" {
+                execute_status_file = Some(serial_device.output_file.clone());
+            }
+        }
+
+        if let Some(output_file) = execute_output_file {
+            return run_qemu_with_execute_coordination(
+                qemu_config,
+                virtiofsd_manager,
+                output_file,
+                execute_status_file,
+            )
+            .await;
+        } else {
+            // No execute output file but commands were specified
+            let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
+
+            // Use select! to coordinate QEMU and virtiofsd processes
+            select! {
+                qemu_result = qemu.wait() => {
+                    match qemu_result {
+                        Ok(exit_status) => {
+                            if !exit_status.success() {
+                                return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+                            }
+                        },
+                        Err(e) => return Err(e),
+                    }
+                }
+                virtiofsd_result = virtiofsd_manager.wait_any() => {
+                    if let Some(result) = virtiofsd_result {
+                        match result {
+                            Ok(Ok(exit_status)) => {
+                                debug!("A virtiofsd process completed: {}", exit_status);
+                                if !exit_status.success() {
+                                    return Err(eyre!("Virtiofsd process failed with exit status: {}", exit_status));
+                                }
+                            },
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => return Err(eyre!("Virtiofsd task join error: {}", e)),
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // No execute commands, run normally with coordination
+        let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
+
+        // Use select! to coordinate QEMU and virtiofsd processes
+        select! {
+            qemu_result = qemu.wait() => {
+                match qemu_result {
+                    Ok(exit_status) => {
+                        if !exit_status.success() {
+                            return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+                        }
+                    },
+                    Err(e) => return Err(e),
+                }
+            }
+            virtiofsd_result = virtiofsd_manager.wait_any() => {
+                if let Some(result) = virtiofsd_result {
+                    match result {
+                        Ok(Ok(exit_status)) => {
+                            debug!("A virtiofsd process completed: {}", exit_status);
+                            if !exit_status.success() {
+                                return Err(eyre!("Virtiofsd process failed with exit status: {}", exit_status));
+                            }
+                        },
+                        Ok(Err(e)) => return Err(e),
+                        Err(e) => return Err(eyre!("Virtiofsd task join error: {}", e)),
+                    }
+                }
+            }
+        }
+    }
+
+    // Ensure all virtiofsd processes are cleaned up
+    virtiofsd_manager.shutdown_all().await;
+
+    Ok(())
+}
+
+/// Run QEMU with execute command coordination using structured concurrency
+async fn run_qemu_with_execute_coordination(
+    qemu_config: crate::qemu::QemuConfig,
+    virtiofsd_manager: &mut AsyncVirtiofsdManager,
+    output_file: String,
+    execute_status_file: Option<String>,
+) -> Result<()> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::select;
+    use tokio::task;
+
+    debug!("Starting QEMU with real-time output streaming for execute commands");
+
+    // Spawn QEMU in background
+    let mut qemu = crate::qemu::RunningQemu::spawn(qemu_config).await?;
+
+    // Set up output streaming task (async version)
+    let output_file_path = output_file.clone();
+    let finished = Arc::new(AtomicBool::new(false));
+    let finished_clone = finished.clone();
+
+    let mut output_task = task::spawn(async move {
+        let mut file_position = 0u64;
+        let mut last_size = 0u64;
+        let mut creation_timeout = 0;
+        const MAX_CREATION_TIMEOUT: u32 = 100; // 10 seconds
+
+        // Wait for the file to be populated
+        while creation_timeout < MAX_CREATION_TIMEOUT && !finished_clone.load(Ordering::Relaxed) {
+            if let Ok(metadata) = std::fs::metadata(&output_file_path) {
+                if metadata.len() > 0 {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            creation_timeout += 1;
+        }
+
+        if creation_timeout >= MAX_CREATION_TIMEOUT {
+            debug!(
+                "Output file content timeout after {}ms",
+                MAX_CREATION_TIMEOUT * 100
+            );
+            return;
+        }
+
+        debug!("Output streaming started");
+
+        loop {
+            if let Ok(metadata) = std::fs::metadata(&output_file_path) {
+                let current_size = metadata.len();
+                if current_size > last_size {
+                    if let Ok(mut file) = File::open(&output_file_path) {
+                        if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
+                            let reader = BufReader::new(file);
+                            let mut bytes_read = 0u64;
+
+                            for line in reader.lines() {
+                                if let Ok(line) = line {
+                                    println!("{}", line);
+                                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                                    bytes_read += line.as_bytes().len() as u64 + 1;
+                                }
+                            }
+
+                            file_position += bytes_read;
+                        }
+                        last_size = current_size;
+                    }
+                }
+            }
+
+            // Check if we should exit
+            if finished_clone.load(Ordering::Relaxed) {
+                // Read any remaining output
+                if let Ok(mut file) = File::open(&output_file_path) {
+                    if let Ok(_) = file.seek(SeekFrom::Start(file_position)) {
+                        let reader = BufReader::new(file);
+                        for line in reader.lines() {
+                            if let Ok(line) = line {
+                                println!("{}", line);
+                                std::io::Write::flush(&mut std::io::stdout()).ok();
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        debug!("Output streaming task finished");
+    });
+
+    // Use select! to coordinate QEMU, output streaming, and virtiofsd processes
+    select! {
+        qemu_result = qemu.wait() => {
+            match qemu_result {
+                Ok(exit_status) => {
+                    // Signal the output task to finish
+                    finished.store(true, Ordering::Relaxed);
+
+                    // Wait for output task to complete
+                    let _ = output_task.await;
+
+                    if !exit_status.success() {
+                        return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
+                    }
+
+                    // Check for execute status
+                    if let Some(status_file) = execute_status_file {
+                        debug!("Checking for execute status file: {}", status_file);
+                        if std::path::Path::new(&status_file).exists() {
+                            debug!("Status file exists, reading content");
+                            let r = std::fs::read_to_string(&status_file)?;
+                            for line in r.lines() {
+                                if let Some(codeval) = line.strip_prefix("ExecMainStatus=") {
+                                    let exit_code: i32 =
+                                        codeval.parse().context("Parsing ExecMainStatus")?;
+                                    if exit_code != 0 {
+                                        return Err(eyre!(
+                                            "Execute command failed with exit code: {}",
+                                            exit_code
+                                        ));
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                },
+                Err(e) => return Err(e),
+            }
+        }
+        virtiofsd_result = virtiofsd_manager.wait_any() => {
+            if let Some(result) = virtiofsd_result {
+                match result {
+                    Ok(Ok(exit_status)) => {
+                        debug!("A virtiofsd process completed: {}", exit_status);
+                        if !exit_status.success() {
+                            // Signal cleanup and return error
+                            finished.store(true, Ordering::Relaxed);
+                            let _ = output_task.await;
+                            return Err(eyre!("Virtiofsd process failed with exit status: {}", exit_status));
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        finished.store(true, Ordering::Relaxed);
+                        let _ = output_task.await;
+                        return Err(e);
+                    },
+                    Err(e) => {
+                        finished.store(true, Ordering::Relaxed);
+                        let _ = output_task.await;
+                        return Err(eyre!("Virtiofsd task join error: {}", e));
+                    },
+                }
+            }
+        }
+        _ = &mut output_task => {
+            debug!("Output streaming task completed");
+        }
+    }
 
     Ok(())
 }
