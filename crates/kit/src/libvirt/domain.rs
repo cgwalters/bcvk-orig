@@ -221,6 +221,15 @@ impl DomainBuilder {
                 // Skip explicit network interface - let libvirt use its default behavior
                 // This avoids issues when the "default" network doesn't exist
             }
+            "user" => {
+                // User-mode networking (NAT) - no network name required
+                xml.push_str(
+                    r#"
+    <interface type="user">
+      <model type="virtio"/>
+    </interface>"#,
+                );
+            }
             network if network.starts_with("bridge=") => {
                 let bridge_name = &network[7..]; // Remove "bridge=" prefix
                 xml.push_str(&format!(

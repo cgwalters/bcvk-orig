@@ -3,9 +3,11 @@
 //! Provides `bcvk pb` commands that mirror podman-bootc functionality
 //! while leveraging our existing libvirt and QEMU infrastructure.
 
+mod domain_list;
 mod vm_registry;
 
 // Re-export everything from the main module
+pub use self::domain_list::*;
 pub use self::vm_registry::*;
 
 use clap::{Parser, Subcommand};
@@ -275,12 +277,8 @@ pub fn run_vm(opts: RunOpts) -> Result<()> {
     let mut updated_registry = manager.load_registry()?;
     if let Some(vm_ref) = updated_registry.get_vm_mut(&vm_name) {
         vm_ref.set_libvirt_domain(vm_name.clone());
-        vm_ref.set_status(if opts.detach {
-            VmStatus::Running
-        } else {
-            VmStatus::Stopped
-        });
-        // TODO: Set SSH port from libvirt domain info
+        vm_ref.set_status(VmStatus::Running); // Always running now
+                                              // TODO: Set SSH port from libvirt domain info
     }
     manager.save_registry(&updated_registry)?;
 
@@ -290,61 +288,39 @@ pub fn run_vm(opts: RunOpts) -> Result<()> {
     println!("  Memory: {} MB", opts.memory);
     println!("  CPUs: {}", opts.cpus);
 
-    if opts.detach {
-        println!("  Status: running");
-        println!("\n🔗 Use 'bcvk pb ssh {}' to connect", vm_name);
-    } else {
-        println!("  Status: created (not started)");
-        println!("\n📋 Use 'bcvk pb start {}' to start the VM", vm_name);
-    }
+    println!("  Status: running");
+    println!("\n🔗 Use 'bcvk pb ssh {}' to connect", vm_name);
 
     println!("📝 Use 'bcvk pb list --all' to see all VMs");
 
     Ok(())
 }
 
-/// Architecture configuration for libvirt domains
-#[derive(Debug)]
-struct ArchConfig {
-    arch: &'static str,
-    machine: &'static str,
-    emulator: &'static str,
-}
+/// Find an available SSH port for port forwarding using random allocation
+fn find_available_ssh_port() -> u16 {
+    use rand::Rng;
 
-impl ArchConfig {
-    /// Detect host architecture and return appropriate configuration
-    fn detect() -> Result<Self> {
-        let arch = std::env::consts::ARCH;
-        match arch {
-            "x86_64" => Ok(Self {
-                arch: "x86_64",
-                machine: "q35",
-                emulator: "/usr/bin/qemu-system-x86_64",
-            }),
-            "aarch64" => Ok(Self {
-                arch: "aarch64",
-                machine: "virt",
-                emulator: "/usr/bin/qemu-system-aarch64",
-            }),
-            // Add more architectures as needed
-            unsupported => Err(color_eyre::eyre::eyre!(
-                "Unsupported architecture: {}. Supported: x86_64, aarch64",
-                unsupported
-            )),
+    // Try random ports in the range 2222-3000 to avoid conflicts in concurrent scenarios
+    let mut rng = rand::rng();
+    const PORT_RANGE_START: u16 = 2222;
+    const PORT_RANGE_END: u16 = 3000;
+
+    // Try up to 100 random attempts
+    for _ in 0..100 {
+        let port = rng.random_range(PORT_RANGE_START..PORT_RANGE_END);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
         }
     }
 
-    /// Check if the emulator exists on the system
-    fn validate_emulator(&self) -> Result<()> {
-        if !std::path::Path::new(self.emulator).exists() {
-            return Err(color_eyre::eyre::eyre!(
-                "QEMU emulator not found: {}. Please install the appropriate QEMU package for {} architecture.",
-                self.emulator,
-                self.arch
-            ));
+    // Fallback to sequential search if random allocation fails
+    for port in PORT_RANGE_START..PORT_RANGE_END {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
         }
-        Ok(())
     }
+
+    PORT_RANGE_START // Ultimate fallback
 }
 
 /// Create a libvirt domain directly from a disk image file
@@ -353,112 +329,74 @@ fn create_libvirt_domain_from_disk(
     disk_path: &std::path::PathBuf,
     opts: &RunOpts,
 ) -> Result<()> {
+    use crate::libvirt::domain::DomainBuilder;
+    use crate::ssh::generate_ssh_keypair;
+    use crate::sshcred::smbios_cred_for_root_ssh;
+    use base64::Engine;
     use std::process::Command;
+    use tracing::info;
 
-    // Detect and validate architecture
-    let arch_config = ArchConfig::detect().with_context(|| "Failed to detect host architecture")?;
-
-    arch_config
-        .validate_emulator()
-        .with_context(|| "QEMU emulator validation failed")?;
-
-    // Generate network interface XML based on network option
-    let network_interface = match opts.network.as_str() {
-        "none" => {
-            // No network interface
-            String::new()
-        }
-        "user" => {
-            // User networking (NAT) - use user-mode networking
-            // This doesn't require a libvirt network to exist
-            r#"    <interface type='user'>
-      <model type='virtio'/>
-    </interface>"#
-                .to_string()
-        }
-        network if network.starts_with("bridge=") => {
-            let bridge_name = &network[7..]; // Remove "bridge=" prefix
-            format!(
-                r#"    <interface type='bridge'>
-      <source bridge='{}'/>
-      <model type='virtio'/>
-    </interface>"#,
-                bridge_name
-            )
-        }
-        network_name => {
-            // Assume it's a network name
-            format!(
-                r#"    <interface type='network'>
-      <source network='{}'/>
-      <model type='virtio'/>
-    </interface>"#,
-                network_name
-            )
-        }
-    };
-
-    // Generate domain XML with proper architecture support
-    let domain_xml = format!(
-        r#"
-<domain type='kvm'>
-  <name>{}</name>
-  <memory unit='MiB'>{}</memory>
-  <vcpu>{}</vcpu>
-  <os>
-    <type arch='{}' machine='{}'>{}</type>
-    <boot dev='hd'/>
-  </os>
-  <features>
-    <acpi/>
-    <apic/>
-    {}
-  </features>
-  <cpu mode='host-passthrough' check='none'/>
-  <clock offset='utc'>
-    <timer name='rtc' tickpolicy='catchup'/>
-    <timer name='pit' tickpolicy='delay'/>
-    <timer name='hpet' present='no'/>
-  </clock>
-  <devices>
-    <emulator>{}</emulator>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='raw'/>
-      <source file='{}'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
-{}
-    <console type='pty'>
-      <target type='virtio' port='0'/>
-    </console>
-    <channel type='unix'>
-      <target type='virtio' name='org.qemu.guest_agent.0'/>
-    </channel>
-    <rng model='virtio'>
-      <backend model='random'>/dev/urandom</backend>
-    </rng>
-  </devices>
-</domain>
-"#,
-        domain_name,
-        opts.memory,
-        opts.cpus,
-        arch_config.arch,
-        arch_config.machine,
-        if arch_config.arch == "x86_64" {
-            "hvm"
-        } else {
-            "hvm"
-        }, // Could be different for ARM
-        if arch_config.arch == "x86_64" {
-            "<vmport state='off'/>"
-        } else {
-            ""
-        }, // VMport is x86-specific
-        arch_config.emulator,
-        disk_path.display(),
-        network_interface
+    // Generate SSH keypair for the domain
+    info!(
+        "Generating ephemeral SSH keypair for domain '{}'",
+        domain_name
     );
+
+    // Find available SSH port for this domain
+    let ssh_port = find_available_ssh_port();
+    info!(
+        "Allocated SSH port {} for domain '{}'",
+        ssh_port, domain_name
+    );
+
+    // Use temporary files for key generation, then read content and clean up
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to create temporary directory: {}", e))?;
+
+    // Generate keypair
+    let keypair = generate_ssh_keypair(temp_dir.path(), "id_rsa")?;
+
+    // Read the key contents from the generated keypair
+    let private_key_content = std::fs::read_to_string(&keypair.private_key_path)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to read generated private key: {}", e))?;
+    let public_key_content = std::fs::read_to_string(&keypair.public_key_path)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to read generated public key: {}", e))?;
+
+    let private_key_base64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        private_key_content.as_bytes(),
+    );
+    info!("Generated ephemeral SSH keypair (will be stored in domain XML)");
+
+    // Generate SMBIOS credential for SSH key injection
+    let smbios_cred = smbios_cred_for_root_ssh(&public_key_content)?;
+
+    // Build domain XML using the existing DomainBuilder with bootc metadata and SSH keys
+    let domain_xml = DomainBuilder::new()
+        .with_name(domain_name)
+        .with_memory(opts.memory as u64)
+        .with_vcpus(opts.cpus)
+        .with_disk(&disk_path.to_string_lossy())
+        .with_network("none") // Use QEMU args for SSH networking instead
+        .with_metadata("bootc:source-image", &opts.image)
+        .with_metadata("bootc:memory-mb", &opts.memory.to_string())
+        .with_metadata("bootc:vcpus", &opts.cpus.to_string())
+        .with_metadata("bootc:disk-size-gb", &opts.disk_size.to_string())
+        .with_metadata("bootc:filesystem", &opts.filesystem)
+        .with_metadata("bootc:network", &opts.network)
+        .with_metadata("bootc:ssh-generated", "true")
+        .with_metadata("bootc:ssh-private-key-base64", &private_key_base64)
+        .with_metadata("bootc:ssh-port", &ssh_port.to_string())
+        .with_qemu_args(vec![
+            "-smbios".to_string(),
+            format!("type=11,value={}", smbios_cred),
+            "-netdev".to_string(),
+            format!("user,id=ssh0,hostfwd=tcp::{}-:22", ssh_port),
+            "-device".to_string(),
+            "virtio-net-pci,netdev=ssh0,addr=0x3".to_string(),
+        ])
+        .build_xml()
+        .with_context(|| "Failed to build domain XML")?;
 
     // Write XML to temporary file
     let xml_path = format!("/tmp/{}.xml", domain_name);
@@ -478,20 +416,18 @@ fn create_libvirt_domain_from_disk(
         ));
     }
 
-    // Start the domain if not detached
-    if !opts.detach {
-        let output = Command::new("virsh")
-            .args(&["start", domain_name])
-            .output()
-            .with_context(|| "Failed to start domain")?;
+    // Start the domain by default (podman-bootc compatibility)
+    let output = Command::new("virsh")
+        .args(&["start", domain_name])
+        .output()
+        .with_context(|| "Failed to start domain")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(color_eyre::eyre::eyre!(
-                "Failed to start libvirt domain: {}",
-                stderr
-            ));
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to start libvirt domain: {}",
+            stderr
+        ));
     }
 
     // Clean up temporary XML file
@@ -502,21 +438,33 @@ fn create_libvirt_domain_from_disk(
 
 /// SSH into a running VM
 pub fn ssh_vm(opts: SshOpts) -> Result<()> {
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    // Use libvirt as the source of truth for domain lookup
+    let lister = DomainLister::new();
 
     // Find target VM
-    let vm = match opts.name {
-        Some(name) => registry
-            .get_vm(&name)
-            .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", name))?,
-        None => registry
-            .get_latest_vm()
-            .ok_or_else(|| color_eyre::eyre::eyre!("No VMs found"))?,
+    let target_name = match opts.name {
+        Some(name) => name,
+        None => {
+            // Get the first running domain if no name specified
+            let running_domains = lister
+                .list_running_bootc_domains()
+                .with_context(|| "Failed to list running bootc domains from libvirt")?;
+            if running_domains.is_empty() {
+                return Err(color_eyre::eyre::eyre!("No running VMs found"));
+            }
+            running_domains[0].name.clone()
+        }
     };
+
+    // Verify the domain exists and is running
+    let domains = lister
+        .list_bootc_domains()
+        .with_context(|| "Failed to list bootc domains from libvirt")?;
+
+    let vm = domains
+        .iter()
+        .find(|d| d.name == target_name)
+        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", target_name))?;
 
     if !vm.is_running() {
         return Err(color_eyre::eyre::eyre!(
@@ -526,57 +474,93 @@ pub fn ssh_vm(opts: SshOpts) -> Result<()> {
         ));
     }
 
-    println!("SSH connection not yet implemented");
-    println!("Would connect to VM: {}", vm.name);
+    // Delegate to the existing libvirt SSH functionality
+    let mut command = Vec::new();
 
-    Ok(())
+    // Handle the command and args from podman-bootc style
+    if let Some(cmd) = opts.command {
+        command.push(cmd);
+    }
+    command.extend(opts.args);
+
+    let ssh_opts = crate::libvirt::ssh::LibvirtSshOpts {
+        domain_name: vm.name.clone(),
+        connect: None,
+        user: "root".to_string(),
+        command,
+        strict_host_keys: false,
+        timeout: 30,
+    };
+
+    crate::libvirt::ssh::run(ssh_opts)
 }
 
 /// List all VMs
 pub fn list_vms(opts: ListOpts) -> Result<()> {
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    // Use libvirt as the source of truth for domain listing
+    let lister = DomainLister::new();
 
-    let vms: Vec<&VmMetadata> = if opts.all {
-        registry.list_vms()
+    let domains = if opts.all {
+        lister
+            .list_bootc_domains()
+            .with_context(|| "Failed to list bootc domains from libvirt")?
     } else {
-        registry.get_running_vms()
+        lister
+            .list_running_bootc_domains()
+            .with_context(|| "Failed to list running bootc domains from libvirt")?
     };
 
     match opts.format.as_str() {
         "table" => {
-            if vms.is_empty() {
-                println!("No VMs found");
+            if domains.is_empty() {
+                if opts.all {
+                    println!("No VMs found");
+                    println!("Tip: Create VMs with 'bcvk pb run <image>'");
+                } else {
+                    println!("No running VMs found");
+                    println!("Use --all to see stopped VMs or 'bcvk pb run <image>' to create one");
+                }
                 return Ok(());
             }
             println!(
                 "{:<20} {:<40} {:<12} {:<20}",
-                "NAME", "IMAGE", "STATUS", "CREATED"
+                "NAME", "IMAGE", "STATUS", "MEMORY"
             );
             println!("{}", "=".repeat(92));
-            for vm in vms {
-                let image = if vm.image.len() > 38 {
-                    format!("{}...", &vm.image[..35])
-                } else {
-                    vm.image.clone()
+            for domain in &domains {
+                let image = match &domain.image {
+                    Some(img) => {
+                        if img.len() > 38 {
+                            format!("{}...", &img[..35])
+                        } else {
+                            img.clone()
+                        }
+                    }
+                    None => "<no metadata>".to_string(),
+                };
+                let memory = match domain.memory_mb {
+                    Some(mem) => format!("{}MB", mem),
+                    None => "unknown".to_string(),
                 };
                 println!(
                     "{:<20} {:<40} {:<12} {:<20}",
-                    vm.name,
+                    domain.name,
                     image,
-                    vm.status_string(),
-                    "recent"
+                    domain.status_string(),
+                    memory
                 );
             }
+            println!(
+                "\nFound {} domain{} (source: libvirt)",
+                domains.len(),
+                if domains.len() == 1 { "" } else { "s" }
+            );
         }
         "json" => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&vms)
-                    .with_context(|| "Failed to serialize VMs as JSON")?
+                serde_json::to_string_pretty(&domains)
+                    .with_context(|| "Failed to serialize domains as JSON")?
             );
         }
         _ => {

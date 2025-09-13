@@ -50,7 +50,7 @@ bcvk pb ssh my-vm -- systemctl status
 3. **Port Discovery**: Query libvirt for SSH port forwarding details
 4. **Command Execution**: Support command execution like existing SSH command
 
-### Additional Commands (Future)
+### Additional Commands
 
 ```bash
 bcvk pb list           # List all podman-bootc VMs
@@ -59,6 +59,24 @@ bcvk pb start <name>   # Start a stopped VM
 bcvk pb remove <name>  # Remove VM and its disk image
 bcvk pb inspect <name> # Show VM details and status
 ```
+
+**CRITICAL FIX - `bcvk pb list` Implementation:**
+
+**Problem:** Current implementation uses VmRegistry as source of truth, which can become inconsistent with actual libvirt domain state.
+
+**Solution:** Implemented libvirt-first approach:
+1. **New module**: `podman_bootc/domain_list.rs` - Queries libvirt directly using `virsh list --all`
+2. **Domain filtering**: Identifies podman-bootc domains by bootc metadata in domain XML
+3. **Real-time state**: Always shows current libvirt domain state (running/stopped/etc.)
+4. **Metadata extraction**: Extracts container image, memory, vcpu info from domain XML
+5. **No cache dependency**: Works even if VmRegistry cache is missing or stale
+
+**Implementation Status:**
+- ✅ `domain_list.rs` module created with libvirt domain querying
+- ✅ Updated `list_vms()` function to use `DomainLister`
+- ✅ Fixed domain creation to use `DomainBuilder` with proper bootc metadata
+- ✅ Detection now correctly uses XML metadata only (no heuristics)
+- ✅ New domains created by `bcvk pb run` will have proper bootc metadata in XML
 
 ## Architecture and Implementation Strategy
 
@@ -89,11 +107,15 @@ pub enum PodmanBootcSubCommand {
 
 ### 2. VM State Management
 
-**New VM registry system:**
-- **Persistent VM tracking**: Store VM metadata in `~/.cache/bootc-kit/podman-bootc/`
-- **VM naming**: Support user-provided names or auto-generate from image
-- **State persistence**: Track VM state (running, stopped, created)
-- **Image tracking**: Associate VMs with source container images
+**ISSUE IDENTIFIED**: The VmRegistry approach creates a second source of truth that can get out of sync with libvirt domains.
+
+**SOLUTION**: Use libvirt as the single source of truth for domain listing and state management.
+
+**Updated approach:**
+- **Primary source**: Query libvirt directly for all domain information (`virsh list --all`)
+- **Domain filtering**: Use libvirt domain metadata to identify podman-bootc domains
+- **State synchronization**: Always query libvirt for current domain state
+- **Registry as cache**: Use VmRegistry only for supplementary metadata (creation details, source image), never as primary source
 
 **VM Metadata Structure:**
 ```rust
