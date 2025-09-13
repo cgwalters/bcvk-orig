@@ -15,6 +15,7 @@ mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
+mod podman_bootc;
 #[allow(dead_code)]
 mod qemu;
 mod run_ephemeral;
@@ -171,6 +172,14 @@ enum Commands {
     /// authentication for seamless VM access.
     Ssh(SshOpts),
 
+    /// Podman-bootc drop-in replacement commands
+    ///
+    /// Provides full compatibility with podman-bootc functionality using
+    /// bcvk's libvirt and QEMU infrastructure. Create persistent VMs,
+    /// manage their lifecycle, and access them via SSH.
+    #[clap(name = "pb")]
+    PodmanBootc(podman_bootc::PodmanBootcOpts),
+
     /// Internal container entrypoint command (hidden from help)
     #[clap(hide = true)]
     ContainerEntrypoint(container_entrypoint::ContainerEntrypointOpts),
@@ -257,6 +266,9 @@ fn main() -> Result<(), Report> {
             }
 
             ssh::connect_via_container(&opts.container_name, opts.args)?;
+        }
+        Commands::PodmanBootc(opts) => {
+            opts.run()?;
         }
         Commands::ContainerEntrypoint(opts) => {
             // Create a tokio runtime for async container entrypoint operations

@@ -99,9 +99,14 @@ impl LibvirtUploadOpts {
     }
 
     /// Create a temporary file path for the disk image
-    fn get_temp_disk_path(&self) -> Result<tempfile::NamedTempFile> {
-        let r = tempfile::NamedTempFile::with_prefix("bcvk-libvirt-upload")?;
-        Ok(r)
+    /// Returns a temporary directory and the disk path within it.
+    /// The directory ensures cleanup when dropped, and the disk path doesn't exist yet.
+    fn get_temp_disk_path(&self) -> Result<(tempfile::TempDir, std::path::PathBuf)> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("bcvk-libvirt-upload")
+            .tempdir()?;
+        let disk_path = temp_dir.path().join("disk.img");
+        Ok((temp_dir, disk_path))
     }
 
     /// Check if libvirt storage pool exists
@@ -206,15 +211,15 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
     };
 
     // Phase 2: Create temporary disk path
-    let temp_disk = opts.get_temp_disk_path()?;
-    info!("Using temporary disk: {:?}", temp_disk);
+    let (temp_dir, temp_disk_path) = opts.get_temp_disk_path()?;
+    info!("Using temporary disk: {:?}", temp_disk_path);
 
     // Phase 3: Run installation to create disk image
     info!("Running bootc installation to create disk image");
 
     let install_opts = ToDiskOpts {
         source_image: opts.source_image.clone(),
-        target_disk: temp_disk.path().to_owned(),
+        target_disk: temp_disk_path.clone(),
         install: opts.install.clone(),
         disk_size: Some(disk_size),
         label: Default::default(),
@@ -233,7 +238,10 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
 
     to_disk(install_opts)?;
 
-    opts.upload_to_libvirt(temp_disk.path(), disk_size, &image_digest)?;
+    opts.upload_to_libvirt(&temp_disk_path, disk_size, &image_digest)?;
+    
+    // Keep temp_dir alive until upload completes to prevent cleanup
+    drop(temp_dir);
 
     let volume_name = opts.get_cached_volume_name(&image_digest);
     info!(
