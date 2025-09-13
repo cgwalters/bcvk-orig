@@ -228,6 +228,10 @@ fn main() {
             tests::libvirt_verb::test_libvirt_ssh_integration();
             Ok(())
         }),
+        Trial::test("libvirt_create_ssh_full_workflow", || {
+            tests::libvirt_verb::test_libvirt_create_ssh_full_workflow();
+            Ok(())
+        }),
         Trial::test("libvirt_vm_lifecycle", || {
             tests::libvirt_verb::test_libvirt_vm_lifecycle();
             Ok(())

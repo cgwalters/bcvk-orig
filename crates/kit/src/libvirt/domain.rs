@@ -3,6 +3,7 @@
 //! This module provides utilities for generating libvirt domain XML configurations
 //! for bootc containers, inspired by the podman-bootc domain builder pattern.
 
+use crate::arch::ArchConfig;
 use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_MB};
 use color_eyre::{eyre::eyre, Result};
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ pub struct DomainBuilder {
     vnc_port: Option<u16>,
     kernel_args: Option<String>,
     metadata: HashMap<String, String>,
+    qemu_args: Vec<String>,
 }
 
 impl Default for DomainBuilder {
@@ -41,6 +43,7 @@ impl DomainBuilder {
             vnc_port: None,
             kernel_args: None,
             metadata: HashMap::new(),
+            qemu_args: Vec::new(),
         }
     }
 
@@ -92,6 +95,12 @@ impl DomainBuilder {
         self
     }
 
+    /// Add QEMU command line arguments
+    pub fn with_qemu_args(mut self, args: Vec<String>) -> Self {
+        self.qemu_args = args;
+        self
+    }
+
     /// Build the domain XML
     pub fn build_xml(self) -> Result<String> {
         let name = self.name.ok_or_else(|| eyre!("Domain name is required"))?;
@@ -99,18 +108,51 @@ impl DomainBuilder {
         let vcpus = self.vcpus.unwrap_or_else(default_vcpus);
         let uuid = self.uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let mut xml = format!(
-            r#"<domain type="kvm">
+        // Detect architecture configuration
+        let arch_config = ArchConfig::detect()?;
+        arch_config.validate_emulator()?;
+
+        let mut xml = if self.qemu_args.is_empty() {
+            format!(
+                r#"<domain type="kvm">
   <name>{}</name>
   <uuid>{}</uuid>
   <memory unit="MiB">{}</memory>
   <currentMemory unit="MiB">{}</currentMemory>
   <vcpu>{}</vcpu>
   <os>
-    <type arch="x86_64" machine="q35">hvm</type>
+    <type arch="{}" machine="{}">{}</type>
     <boot dev="hd"/>"#,
-            name, uuid, memory, memory, vcpus
-        );
+                name,
+                uuid,
+                memory,
+                memory,
+                vcpus,
+                arch_config.arch,
+                arch_config.machine,
+                arch_config.os_type
+            )
+        } else {
+            format!(
+                r#"<domain type="kvm" xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
+  <name>{}</name>
+  <uuid>{}</uuid>
+  <memory unit="MiB">{}</memory>
+  <currentMemory unit="MiB">{}</currentMemory>
+  <vcpu>{}</vcpu>
+  <os>
+    <type arch="{}" machine="{}">{}</type>
+    <boot dev="hd"/>"#,
+                name,
+                uuid,
+                memory,
+                memory,
+                vcpus,
+                arch_config.arch,
+                arch_config.machine,
+                arch_config.os_type
+            )
+        };
 
         // Add kernel arguments if specified (for direct boot)
         if let Some(ref kargs) = self.kernel_args {
@@ -119,15 +161,28 @@ impl DomainBuilder {
 
         xml.push_str("\n  </os>");
 
-        // Features
+        // Architecture-specific features
+        xml.push_str(arch_config.xml_features());
+
+        // Architecture-specific CPU configuration
+        xml.push_str(&format!(
+            r#"
+  <cpu mode="{}"/>"#,
+            arch_config.cpu_mode()
+        ));
+
+        // Clock and lifecycle configuration
         xml.push_str(
             r#"
-  <features>
-    <acpi/>
-    <apic/>
-  </features>
-  <cpu mode="host-model"/>
-  <clock offset="utc"/>
+  <clock offset="utc">"#,
+        );
+
+        // Architecture-specific timers
+        xml.push_str(arch_config.xml_timers());
+
+        xml.push_str(
+            r#"
+  </clock>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
   <on_crash>destroy</on_crash>"#,
@@ -135,6 +190,13 @@ impl DomainBuilder {
 
         // Devices section
         xml.push_str("\n  <devices>");
+
+        // Architecture-specific emulator
+        xml.push_str(&format!(
+            r#"
+    <emulator>{}</emulator>"#,
+            arch_config.emulator
+        ));
 
         // Disk
         if let Some(ref disk_path) = self.disk_path {
@@ -208,6 +270,15 @@ impl DomainBuilder {
 
         xml.push_str("\n  </devices>");
 
+        // QEMU commandline section (if we have QEMU args)
+        if !self.qemu_args.is_empty() {
+            xml.push_str("\n  <qemu:commandline>");
+            for arg in &self.qemu_args {
+                xml.push_str(&format!("\n    <qemu:arg value='{}'/>", arg));
+            }
+            xml.push_str("\n  </qemu:commandline>");
+        }
+
         // Metadata section
         if !self.metadata.is_empty() {
             xml.push_str("\n  <metadata>");
@@ -252,6 +323,13 @@ mod tests {
         assert!(xml.contains("<memory unit=\"MiB\">4096</memory>"));
         assert!(xml.contains("<vcpu>4</vcpu>"));
         assert!(xml.contains("source file=\"/path/to/disk.raw\""));
+
+        // Should contain current architecture (detected at runtime)
+        let arch = std::env::consts::ARCH;
+        assert!(xml.contains(&format!("arch=\"{}\"", arch)));
+
+        // Should contain emulator path
+        assert!(xml.contains("<emulator>/usr/bin/qemu-system-"));
     }
 
     #[test]
@@ -307,5 +385,40 @@ mod tests {
 
         assert!(xml.contains("graphics type=\"vnc\" port=\"5901\""));
         assert!(xml.contains("model type=\"vga\""));
+    }
+
+    #[test]
+    fn test_architecture_detection() {
+        let xml = DomainBuilder::new()
+            .with_name("test-arch")
+            .build_xml()
+            .unwrap();
+
+        let host_arch = std::env::consts::ARCH;
+
+        // Should contain the correct architecture
+        assert!(xml.contains(&format!("arch=\"{}\"", host_arch)));
+
+        // Should contain architecture-appropriate machine type
+        match host_arch {
+            "x86_64" => {
+                assert!(xml.contains("machine=\"q35\""));
+                assert!(xml.contains("<emulator>/usr/bin/qemu-system-x86_64</emulator>"));
+                assert!(xml.contains("vmport state='off'")); // x86_64-specific feature
+            }
+            "aarch64" => {
+                assert!(xml.contains("machine=\"virt\""));
+                assert!(xml.contains("<emulator>/usr/bin/qemu-system-aarch64</emulator>"));
+                assert!(!xml.contains("vmport")); // ARM64 doesn't have vmport
+            }
+            _ => {
+                // Test passes for unsupported architectures (will use defaults)
+            }
+        }
+
+        // Should contain architecture-specific features and timers
+        assert!(xml.contains("<features>"));
+        assert!(xml.contains("<acpi/>"));
+        assert!(xml.contains("<timer name='rtc'"));
     }
 }

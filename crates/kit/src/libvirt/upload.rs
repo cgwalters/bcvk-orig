@@ -239,7 +239,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
     to_disk(install_opts)?;
 
     opts.upload_to_libvirt(&temp_disk_path, disk_size, &image_digest)?;
-    
+
     // Keep temp_dir alive until upload completes to prevent cleanup
     drop(temp_dir);
 

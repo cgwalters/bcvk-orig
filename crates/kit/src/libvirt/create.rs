@@ -9,9 +9,15 @@ use crate::install_options::InstallOptions;
 use crate::libvirt::domain::DomainBuilder;
 use crate::libvirt::upload::LibvirtUploadOpts;
 use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR, DEFAULT_MEMORY_USER_STR};
+use crate::ssh::generate_ssh_keypair;
+use crate::sshcred::smbios_cred_for_root_ssh;
+use base64::Engine;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile;
 use tracing::{debug, info, warn};
 
 /// Configuration options for creating a libvirt domain from bootc volume
@@ -84,12 +90,33 @@ pub struct LibvirtCreateOpts {
     /// Number of vCPUs for installation VM during auto-upload
     #[clap(long, default_value_t = default_vcpus())]
     pub install_vcpus: u32,
+
+    /// Generate ephemeral SSH keypair and inject into domain
+    #[clap(long)]
+    pub generate_ssh_key: bool,
+
+    /// Path to existing SSH private key to use (public key must exist at <key>.pub)
+    #[clap(long)]
+    pub ssh_key: Option<String>,
+
+    /// SSH port for port forwarding (default: auto-assign)
+    #[clap(long)]
+    pub ssh_port: Option<u16>,
 }
 
 /// Metadata extracted from bootc volume
 #[derive(Debug)]
 pub struct BootcVolumeMetadata {
     pub source_image: Option<String>,
+}
+
+/// SSH configuration for domain
+#[derive(Debug, Clone)]
+pub struct SshConfig {
+    pub private_key_content: String,
+    pub public_key: String,
+    pub port: u16,
+    pub is_generated: bool,
 }
 
 impl LibvirtCreateOpts {
@@ -286,15 +313,85 @@ impl LibvirtCreateOpts {
         }
     }
 
+    /// Create a domain-specific copy of the volume
+    fn create_domain_volume(&self, source_volume_name: &str, domain_name: &str) -> Result<String> {
+        let domain_volume_name = format!("{}-{}", source_volume_name, domain_name);
+        let domain_volume_path = format!("{}.raw", domain_volume_name);
+        let source_volume_path = format!("{}.raw", source_volume_name);
+
+        // Check if domain volume already exists
+        let check_output = self
+            .virsh_command()
+            .args(&["vol-info", &domain_volume_path, "--pool", &self.pool])
+            .output()?;
+
+        if check_output.status.success() {
+            if self.force {
+                info!("Removing existing domain volume: {}", domain_volume_name);
+                let _ = self
+                    .virsh_command()
+                    .args(&["vol-delete", &domain_volume_path, "--pool", &self.pool])
+                    .output();
+            } else {
+                return Err(eyre!(
+                    "Domain volume '{}' already exists. Use --force to recreate.",
+                    domain_volume_name
+                ));
+            }
+        }
+
+        info!(
+            "Creating domain-specific volume: {} from {}",
+            domain_volume_name, source_volume_name
+        );
+
+        // Clone the source volume to create a domain-specific copy
+        let output = self
+            .virsh_command()
+            .args(&[
+                "vol-clone",
+                &source_volume_path,
+                &domain_volume_path,
+                "--pool",
+                &self.pool,
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(eyre!("Failed to clone volume: {}", stderr));
+        }
+
+        // Get the path to the new domain volume
+        let vol_path_output = self
+            .virsh_command()
+            .args(&["vol-path", &domain_volume_path, "--pool", &self.pool])
+            .output()?;
+
+        if vol_path_output.status.success() {
+            let path = String::from_utf8(vol_path_output.stdout)?;
+            Ok(path.trim().to_string())
+        } else {
+            Err(eyre!("Failed to get domain volume path"))
+        }
+    }
+
     /// Create the libvirt domain
     fn create_domain(
         &self,
-        volume_path: &str,
+        _volume_path: &str,
         metadata: &BootcVolumeMetadata,
         volume_name: &str,
     ) -> Result<()> {
         let domain_name = self.get_domain_name();
         let memory_mb = self.parse_memory()?;
+
+        // Create a domain-specific volume copy to avoid file locking issues
+        let domain_volume_path = self.create_domain_volume(volume_name, &domain_name)?;
+        info!("Using domain-specific volume: {}", domain_volume_path);
+
+        // Setup SSH configuration
+        let ssh_config = self.setup_ssh_config(&domain_name)?;
 
         info!(
             "Creating domain '{}' from volume '{}' in pool '{}'",
@@ -326,7 +423,7 @@ impl LibvirtCreateOpts {
             info!("  Name: {}", domain_name);
             info!("  Memory: {} MB", memory_mb);
             info!("  vCPUs: {}", self.vcpus);
-            info!("  Volume: {}", volume_path);
+            info!("  Volume: {}", domain_volume_path);
             info!("  Network: {}", self.network);
             if let Some(ref source_image) = metadata.source_image {
                 info!("  Source Image: {}", source_image);
@@ -334,13 +431,44 @@ impl LibvirtCreateOpts {
             return Ok(());
         }
 
+        // Prepare QEMU args for SSH injection (if SSH is configured)
+        let mut qemu_args = Vec::new();
+        let network_config = if ssh_config.is_some() {
+            // When SSH is configured, disable default networking to avoid conflicts
+            // and use QEMU commandline for SSH port forwarding
+            "none"
+        } else {
+            &self.network
+        };
+
+        if let Some(ref ssh) = ssh_config {
+            // Generate SMBIOS credential for SSH key injection
+            let smbios_cred = smbios_cred_for_root_ssh(&ssh.public_key)?;
+            info!("Injecting SSH key via SMBIOS credential");
+
+            qemu_args.push("-smbios".to_string());
+            qemu_args.push(format!("type=11,value={}", smbios_cred));
+
+            // Add SSH port forwarding - this replaces the default network
+            // Use explicit PCI address to avoid conflicts with libvirt's device management
+            qemu_args.push("-netdev".to_string());
+            qemu_args.push(format!("user,id=ssh0,hostfwd=tcp::{}-:22", ssh.port));
+            qemu_args.push("-device".to_string());
+            qemu_args.push("virtio-net-pci,netdev=ssh0,addr=0x3".to_string());
+        }
+
         // Build domain configuration
         let mut domain_builder = DomainBuilder::new()
             .with_name(&domain_name)
             .with_memory(memory_mb)
             .with_vcpus(self.vcpus)
-            .with_disk(volume_path)
-            .with_network(&self.network);
+            .with_disk(&domain_volume_path)
+            .with_network(network_config);
+
+        // Add QEMU arguments if we have any
+        if !qemu_args.is_empty() {
+            domain_builder = domain_builder.with_qemu_args(qemu_args);
+        }
 
         if self.vnc {
             let port = self.vnc_port.unwrap_or(5900 + self.vcpus as u16);
@@ -354,6 +482,18 @@ impl LibvirtCreateOpts {
         // Add metadata to domain
         if let Some(ref source_image) = metadata.source_image {
             domain_builder = domain_builder.with_metadata("bootc:source-image", source_image);
+        }
+
+        // Add SSH metadata if configured
+        if let Some(ref ssh) = ssh_config {
+            // Base64 encode the private key to avoid XML formatting issues
+            let encoded_private_key = base64::engine::general_purpose::STANDARD
+                .encode(ssh.private_key_content.as_bytes());
+
+            domain_builder = domain_builder
+                .with_metadata("ssh-private-key-base64", &encoded_private_key)
+                .with_metadata("ssh-port", &ssh.port.to_string())
+                .with_metadata("ssh-generated", &ssh.is_generated.to_string());
         }
 
         let domain_xml = domain_builder.build_xml()?;
@@ -395,7 +535,7 @@ impl LibvirtCreateOpts {
                 info!("Domain '{}' started successfully", domain_name);
 
                 // Show connection information
-                self.show_connection_info(&domain_name)?;
+                self.show_connection_info(&domain_name, &ssh_config)?;
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 warn!("Failed to start domain: {}", stderr);
@@ -405,8 +545,96 @@ impl LibvirtCreateOpts {
         Ok(())
     }
 
+    /// Setup SSH configuration (generate keys or load existing)
+    fn setup_ssh_config(&self, domain_name: &str) -> Result<Option<SshConfig>> {
+        if !self.generate_ssh_key && self.ssh_key.is_none() {
+            return Ok(None);
+        }
+
+        let port = self.find_available_ssh_port();
+
+        if let Some(ref ssh_key_path) = self.ssh_key {
+            // Use existing SSH key
+            let private_key_path = PathBuf::from(ssh_key_path);
+            let public_key_path = format!("{}.pub", ssh_key_path);
+
+            if !private_key_path.exists() {
+                return Err(eyre!("SSH private key not found: {}", ssh_key_path));
+            }
+
+            if !Path::new(&public_key_path).exists() {
+                return Err(eyre!("SSH public key not found: {}", public_key_path));
+            }
+
+            let private_key_content = fs::read_to_string(&private_key_path)
+                .map_err(|e| eyre!("Failed to read private key {}: {}", ssh_key_path, e))?;
+
+            let public_key = fs::read_to_string(&public_key_path)
+                .map_err(|e| eyre!("Failed to read public key {}: {}", public_key_path, e))?;
+
+            info!("Using existing SSH key: {}", ssh_key_path);
+
+            Ok(Some(SshConfig {
+                private_key_content: private_key_content.trim().to_string(),
+                public_key: public_key.trim().to_string(),
+                port,
+                is_generated: false,
+            }))
+        } else if self.generate_ssh_key {
+            // Generate ephemeral SSH keys (in memory, will be stored in domain XML)
+            info!(
+                "Generating ephemeral SSH keypair for domain '{}'",
+                domain_name
+            );
+
+            // Use temporary files for key generation, then read content and clean up
+            let temp_dir = tempfile::tempdir()
+                .map_err(|e| eyre!("Failed to create temporary directory: {}", e))?;
+
+            // Generate keypair
+            let keypair = generate_ssh_keypair(temp_dir.path(), "id_rsa")?;
+
+            // Read the key contents from the generated keypair
+            let private_key_content = fs::read_to_string(&keypair.private_key_path)
+                .map_err(|e| eyre!("Failed to read generated private key: {}", e))?;
+
+            let public_key = fs::read_to_string(&keypair.public_key_path)
+                .map_err(|e| eyre!("Failed to read generated public key: {}", e))?;
+
+            info!("Generated ephemeral SSH keypair (will be stored in domain XML)");
+
+            // temp_dir will be automatically cleaned up when dropped
+
+            Ok(Some(SshConfig {
+                private_key_content: private_key_content.trim().to_string(),
+                public_key: public_key.trim().to_string(),
+                port,
+                is_generated: true,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Find an available SSH port for port forwarding
+    fn find_available_ssh_port(&self) -> u16 {
+        self.ssh_port.unwrap_or_else(|| {
+            // Start from 2222 and find first available port
+            for port in 2222..3000 {
+                if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                    return port;
+                }
+            }
+            2222 // Fallback
+        })
+    }
+
     /// Display connection information for the created domain
-    fn show_connection_info(&self, domain_name: &str) -> Result<()> {
+    fn show_connection_info(
+        &self,
+        domain_name: &str,
+        ssh_config: &Option<SshConfig>,
+    ) -> Result<()> {
         info!("Domain '{}' connection information:", domain_name);
 
         if self.vnc {
@@ -415,7 +643,16 @@ impl LibvirtCreateOpts {
         }
 
         info!("  Serial Console: virsh console {}", domain_name);
-        info!("  SSH Access: bcvk libvirt ssh {}", domain_name);
+
+        if let Some(ref ssh) = ssh_config {
+            info!("  SSH Access: bcvk libvirt ssh {}", domain_name);
+            info!("  SSH Port: {}", ssh.port);
+            if ssh.is_generated {
+                info!("  SSH Key: stored in domain XML (ephemeral)");
+            } else {
+                info!("  SSH Key: imported from existing key");
+            }
+        }
 
         Ok(())
     }

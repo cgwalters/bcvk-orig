@@ -4,6 +4,7 @@ use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
 
+mod arch;
 mod cli_json;
 mod container_entrypoint;
 pub(crate) mod containerenv;

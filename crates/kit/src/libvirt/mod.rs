@@ -11,6 +11,7 @@ use color_eyre::Result;
 pub mod create;
 pub mod domain;
 pub mod list;
+pub mod ssh;
 pub mod upload;
 
 /// libvirt subcommands for managing bootc disk images and domains
@@ -36,6 +37,13 @@ pub enum LibvirtCommands {
     /// container image metadata and creation information. Supports both
     /// human-readable and JSON output formats.
     List(list::LibvirtListOpts),
+
+    /// SSH to libvirt domain with embedded SSH key
+    ///
+    /// Connects to libvirt domains that were created with SSH key injection.
+    /// Automatically retrieves SSH credentials from domain XML metadata and
+    /// establishes connection using embedded private key.
+    Ssh(ssh::LibvirtSshOpts),
 }
 
 impl LibvirtCommands {
@@ -44,6 +52,7 @@ impl LibvirtCommands {
             LibvirtCommands::Upload(opts) => upload::run(opts),
             LibvirtCommands::Create(opts) => create::run(opts),
             LibvirtCommands::List(opts) => list::run(opts),
+            LibvirtCommands::Ssh(opts) => ssh::run(opts),
         }
     }
 }

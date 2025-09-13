@@ -255,11 +255,112 @@ pub enum VmStatus {
 - **Issue**: Multiple VMs competing for ports/resources
 - **Mitigation**: Dynamic port allocation, resource validation
 
-## Next Steps
+## Current Implementation Plan (Refined)
 
-1. **Create Phase 1 implementation plan**
-2. **Set up development branch**: `feature/podman-bootc-replacement`
-3. **Implement CLI structure and basic VM registry**
-4. **Create minimal working `bcvk pb run` command**
-5. **Add comprehensive testing framework**
-6. **Iterate on feature completeness and compatibility**
+Based on research of bootc-kit and podman-bootc SSH injection mechanisms, here's the refined implementation approach:
+
+### Immediate Tasks (Current Sprint)
+
+#### 1. SSH Key Management System Design
+- **Ephemeral SSH Keys**: Generate unique SSH keypairs per VM (stored in libvirt domain XML annotations)
+- **Key Storage**: Store private key path in domain metadata, public key injected via SMBIOS
+- **Configurable Keys**: Support `--ssh-key` option to use existing keypair
+- **Default Behavior**: Auto-generate ephemeral keys if none specified
+
+#### 2. Enhanced libvirt create with SSH Integration
+- **Add SMBIOS support**: Integrate existing `sshcred.rs` SMBIOS credential injection
+- **Domain XML enhancement**: Add QEMU commandline args for SMBIOS type=11
+- **SSH key options**: Add `--ssh-key` and `--generate-ssh-key` flags to libvirt create
+- **Annotation storage**: Store SSH key metadata in libvirt domain annotations
+
+#### 3. New `bcvk libvirt ssh` Command
+- **SSH connection**: Connect to libvirt domains using stored SSH metadata
+- **Port discovery**: Query domain XML for SSH port forwarding configuration
+- **Key lookup**: Retrieve SSH private key path from domain annotations
+- **Command execution**: Support remote command execution like existing SSH command
+
+#### 4. Enhanced `bcvk pb run` Integration
+- **Leverage libvirt create**: Use `bcvk libvirt create --start --generate-ssh-key`
+- **Automatic SSH setup**: Auto-inject SSH keys and configure port forwarding
+- **Seamless connection**: After VM creation, immediately SSH to the VM
+- **Persistent VMs**: Create libvirt domains that persist beyond command execution
+
+### Technical Implementation Details
+
+#### SSH Key Injection via SMBIOS (Existing Mechanism)
+Using bootc-kit's existing `sshcred.rs` implementation:
+```rust
+// Generate SMBIOS credential string for SSH key injection
+let smbios_cred = smbios_cred_for_root_ssh(&ssh_pubkey)?;
+
+// Add to QEMU command line via libvirt
+let qemu_args = format!(
+    r#"<qemu:commandline>
+    <qemu:arg value='-smbios'/>
+    <qemu:arg value='type=11,value={}'/>
+</qemu:commandline>"#,
+    smbios_cred
+);
+```
+
+#### Domain XML Annotation Storage
+Store SSH metadata in libvirt domain XML:
+```xml
+<metadata>
+  <bootc:container xmlns:bootc="https://github.com/containers/bootc">
+    <bootc:ssh-private-key>/path/to/private/key</bootc:ssh-private-key>
+    <bootc:ssh-port>2222</bootc:ssh-port>
+    <bootc:generated-key>true</bootc:generated-key>
+  </bootc:container>
+</metadata>
+```
+
+#### QEMU Command Integration
+Extend domain builder to support QEMU commandline arguments:
+```rust
+// In domain.rs - add method to DomainBuilder
+pub fn with_qemu_args(mut self, args: &[String]) -> Self {
+    self.qemu_args = Some(args.to_vec());
+    self
+}
+
+// Generate XML with qemu:commandline namespace
+```
+
+### Implementation Sequence
+
+#### Step 1: Enhance libvirt create (In Progress)
+- Add SSH key generation options to `LibvirtCreateOpts`
+- Integrate SMBIOS credential injection from `sshcred.rs`
+- Add QEMU commandline support to `DomainBuilder`
+- Store SSH metadata in domain XML annotations
+
+#### Step 2: Create libvirt ssh command
+- New CLI command: `bcvk libvirt ssh <domain-name>`
+- Read SSH metadata from domain XML annotations
+- Establish SSH connection using stored private key
+- Support command execution: `bcvk libvirt ssh <domain> -- <command>`
+
+#### Step 3: Update pb run integration
+- Modify `bcvk pb run` to use `bcvk libvirt create --start --generate-ssh-key`
+- Auto-SSH after successful VM creation
+- Maintain VM registry for podman-bootc compatibility
+
+#### Step 4: Testing and Validation
+- Test SSH key injection mechanism
+- Verify systemd credential processing in VMs
+- Test end-to-end: run → create domain → SSH connection
+- Validate with multiple bootc images
+
+### Success Metrics
+1. **SSH Key Injection**: Auto-generated keys work seamlessly with systemd credentials
+2. **libvirt ssh Command**: Can SSH to any domain created with SSH keys
+3. **pb run Integration**: Single command creates VM and provides SSH access
+4. **Persistent VMs**: Domains remain available after command completion
+
+### Next Immediate Actions
+1. Add SSH key generation options to `LibvirtCreateOpts`
+2. Integrate SMBIOS credential injection into domain creation
+3. Implement QEMU commandline support in `DomainBuilder`
+4. Create basic `bcvk libvirt ssh` command
+5. Test end-to-end SSH injection and connection

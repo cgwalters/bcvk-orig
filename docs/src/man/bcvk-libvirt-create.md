@@ -119,6 +119,22 @@ Create and start domains from uploaded bootc volumes
 
     Default: 32
 
+**--generate-ssh-key**=*GENERATE_SSH_KEY*
+
+    Generate ephemeral SSH keypair and inject into domain
+
+    Possible values:
+    - true
+    - false
+
+**--ssh-key**=*SSH_KEY*
+
+    Path to existing SSH private key to use (public key must exist at <key>.pub)
+
+**--ssh-port**=*SSH_PORT*
+
+    SSH port for port forwarding (default: auto-assign)
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES
