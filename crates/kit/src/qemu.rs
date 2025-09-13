@@ -123,13 +123,13 @@ pub enum BootMode {
 }
 
 /// Complete QEMU VM configuration with builder pattern.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct QemuConfig {
     /// RAM in megabytes (128MB-1TB)
     pub memory_mb: u32,
     /// Number of vCPUs (1-256)
     pub vcpus: u32,
-    pub boot_mode: BootMode,
+    boot_mode: Option<BootMode>,
     /// Main VirtioFS configuration for root filesystem (handled separately from additional mounts)
     pub main_virtiofs_config: Option<VirtiofsConfig>,
     /// VirtioFS configurations to spawn as daemons
@@ -150,7 +150,7 @@ pub struct QemuConfig {
     /// UEFI variables file
     pub uefi_vars_path: Option<String>,
     /// SMBIOS credentials for systemd
-    pub smbios_credentials: Vec<String>,
+    smbios_credentials: Vec<String>,
     /// VSOCK is enabled by default
     pub disable_vsock: bool,
 
@@ -170,27 +170,13 @@ impl QemuConfig {
         Self {
             memory_mb,
             vcpus,
-            boot_mode: BootMode::DirectBoot {
+            boot_mode: Some(BootMode::DirectBoot {
                 kernel_path,
                 initramfs_path,
                 kernel_cmdline: vec![],
                 virtiofs_socket,
-            },
-            main_virtiofs_config: None,
-            fdset: Default::default(),
-            virtiofs_configs: vec![],
-            additional_mounts: vec![],
-            virtio_serial_devices: vec![],
-            virtio_blk_devices: vec![],
-            display_mode: DisplayMode::default(),
-            network_mode: NetworkMode::default(),
-            resource_limits: ResourceLimits::default(),
-            enable_console: false,
-            uefi_firmware_path: None,
-            uefi_vars_path: None,
-            smbios_credentials: vec![],
-            disable_vsock: false,
-            systemd_notify: None,
+            }),
+            ..Default::default()
         }
     }
 
@@ -199,31 +185,17 @@ impl QemuConfig {
         Self {
             memory_mb,
             vcpus,
-            boot_mode: BootMode::DiskBoot {
+            boot_mode: Some(BootMode::DiskBoot {
                 primary_disk,
                 uefi: false,
-            },
-            main_virtiofs_config: None,
-            fdset: Default::default(),
-            virtiofs_configs: vec![],
-            additional_mounts: vec![],
-            virtio_serial_devices: vec![],
-            virtio_blk_devices: vec![],
-            display_mode: DisplayMode::default(),
-            network_mode: NetworkMode::default(),
-            resource_limits: ResourceLimits::default(),
-            enable_console: false,
-            uefi_firmware_path: None,
-            uefi_vars_path: None,
-            smbios_credentials: vec![],
-            disable_vsock: false,
-            systemd_notify: None,
+            }),
+            ..Default::default()
         }
     }
 
     /// Set kernel command line arguments (only for direct boot)
     pub fn set_kernel_cmdline(&mut self, cmdline: Vec<String>) -> &mut Self {
-        if let BootMode::DirectBoot { kernel_cmdline, .. } = &mut self.boot_mode {
+        if let Some(BootMode::DirectBoot { kernel_cmdline, .. }) = self.boot_mode.as_mut() {
             *kernel_cmdline = cmdline;
         }
         self
@@ -232,9 +204,9 @@ impl QemuConfig {
     /// Enable UEFI boot (only for disk boot)
     #[allow(dead_code)]
     pub fn set_uefi_boot(&mut self, uefi: bool) -> &mut Self {
-        if let BootMode::DiskBoot {
+        if let Some(BootMode::DiskBoot {
             uefi: uefi_flag, ..
-        } = &mut self.boot_mode
+        }) = self.boot_mode.as_mut()
         {
             *uefi_flag = uefi;
         }
@@ -269,49 +241,6 @@ impl QemuConfig {
         }
         if self.vcpus > 256 {
             return Err(eyre!("vCPU count too high: {} (maximum 256)", self.vcpus));
-        }
-
-        // Boot mode validation
-        match &self.boot_mode {
-            BootMode::DirectBoot {
-                kernel_path,
-                initramfs_path,
-                virtiofs_socket,
-                ..
-            } => {
-                if !std::path::Path::new(kernel_path).exists() {
-                    return Err(eyre!("Kernel file does not exist: {}", kernel_path));
-                }
-                if !std::path::Path::new(initramfs_path).exists() {
-                    return Err(eyre!("Initramfs file does not exist: {}", initramfs_path));
-                }
-                let socket_dir = std::path::Path::new(virtiofs_socket)
-                    .parent()
-                    .ok_or_else(|| eyre!("Invalid virtiofs socket path: {}", virtiofs_socket))?;
-                if !socket_dir.exists() {
-                    return Err(eyre!(
-                        "Virtiofs socket directory does not exist: {}",
-                        socket_dir.display()
-                    ));
-                }
-            }
-            BootMode::DiskBoot { primary_disk, uefi } => {
-                if !std::path::Path::new(primary_disk).exists() {
-                    return Err(eyre!("Primary disk image does not exist: {}", primary_disk));
-                }
-                if *uefi {
-                    if let Some(ref firmware_path) = self.uefi_firmware_path {
-                        if !std::path::Path::new(firmware_path).exists() {
-                            return Err(eyre!(
-                                "UEFI firmware file does not exist: {}",
-                                firmware_path
-                            ));
-                        }
-                    } else {
-                        return Err(eyre!("UEFI boot enabled but no firmware path specified"));
-                    }
-                }
-            }
         }
 
         // Validate virtio block devices
@@ -360,11 +289,11 @@ impl QemuConfig {
     }
 
     /// Add a virtiofs configuration that will be spawned as a daemon
-    pub fn add_virtiofs(&mut self, config: VirtiofsConfig) -> &mut Self {
+    pub fn add_virtiofs(&mut self, config: VirtiofsConfig, tag: &str) -> &mut Self {
         // Also add a corresponding mount so QEMU knows about it
         self.additional_mounts.push(VirtiofsMount {
             socket_path: config.socket_path.clone(),
-            tag: format!("virtiofs-{}", self.virtiofs_configs.len()),
+            tag: tag.to_owned(),
         });
         self.virtiofs_configs.push(config);
         self
@@ -538,13 +467,13 @@ fn spawn(
     }
 
     // Configure boot mode
-    match &config.boot_mode {
-        BootMode::DirectBoot {
+    match config.boot_mode.as_ref() {
+        Some(BootMode::DirectBoot {
             kernel_path,
             initramfs_path,
             kernel_cmdline,
             virtiofs_socket,
-        } => {
+        }) => {
             // Direct kernel boot
             cmd.args(["-kernel", kernel_path, "-initrd", initramfs_path]);
 
@@ -560,7 +489,7 @@ fn spawn(
             let append_str = kernel_cmdline.join(" ");
             cmd.args(["-append", &append_str]);
         }
-        BootMode::DiskBoot { primary_disk, uefi } => {
+        Some(BootMode::DiskBoot { primary_disk, uefi }) => {
             // Configure UEFI firmware if requested
             if *uefi {
                 if let Some(ref firmware_path) = config.uefi_firmware_path {
@@ -621,6 +550,7 @@ fn spawn(
                 "virtio-blk-pci,drive=boot_drive,serial=boot_disk,bootindex=1",
             ]);
         }
+        None => {}
     }
 
     // Add additional virtiofs mounts
@@ -950,7 +880,7 @@ mod tests {
         let mut config = QemuConfig::new_disk_boot(2048, 2, "/tmp/disk.img".to_string());
         config.set_uefi_boot(true).set_console(false);
 
-        if let BootMode::DiskBoot { primary_disk, uefi } = &config.boot_mode {
+        if let Some(BootMode::DiskBoot { primary_disk, uefi }) = config.boot_mode.as_ref() {
             assert_eq!(primary_disk, "/tmp/disk.img");
             assert_eq!(*uefi, true);
         } else {

@@ -1018,8 +1018,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     qemu_config.set_main_virtiofs(main_virtiofsd_config.clone());
 
     // Add additional virtiofs configurations (will be spawned by QEMU)
-    for (virtiofs_config, _tag) in additional_mounts {
-        qemu_config.add_virtiofs(virtiofs_config);
+    for (virtiofs_config, tag) in additional_mounts {
+        qemu_config.add_virtiofs(virtiofs_config, &tag);
     }
 
     let exec_pipes = if !opts.common.execute.is_empty() {
