@@ -36,15 +36,8 @@ pub struct VirtioSerialOut {
     pub name: String,
     /// Host file path for output
     pub output_file: String,
-}
-
-/// VirtIO-Serial device with pipe-based output
-#[derive(Debug)]
-pub struct VirtioSerialPipe {
-    /// Device name (becomes /dev/virtio-ports/{name})
-    pub name: String,
-    /// Write end of the pipe (passed to QEMU)
-    pub write_fd: OwnedFd,
+    /// Whether to append to the file (needed for fdsets)
+    pub append: bool,
 }
 
 /// VirtIO-Block storage device configuration.
@@ -141,10 +134,11 @@ pub struct QemuConfig {
     pub main_virtiofs_config: Option<VirtiofsConfig>,
     /// VirtioFS configurations to spawn as daemons
     pub virtiofs_configs: Vec<VirtiofsConfig>,
+    /// File descriptors to pass
+    fdset: Vec<Arc<OwnedFd>>,
     /// Additional VirtIO-FS mounts
     pub additional_mounts: Vec<VirtiofsMount>,
     pub virtio_serial_devices: Vec<VirtioSerialOut>,
-    pub virtio_serial_pipes: Vec<VirtioSerialPipe>,
     pub virtio_blk_devices: Vec<VirtioBlkDevice>,
     pub display_mode: DisplayMode,
     pub network_mode: NetworkMode,
@@ -183,10 +177,10 @@ impl QemuConfig {
                 virtiofs_socket,
             },
             main_virtiofs_config: None,
+            fdset: Default::default(),
             virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
-            virtio_serial_pipes: vec![],
             virtio_blk_devices: vec![],
             display_mode: DisplayMode::default(),
             network_mode: NetworkMode::default(),
@@ -210,10 +204,10 @@ impl QemuConfig {
                 uefi: false,
             },
             main_virtiofs_config: None,
+            fdset: Default::default(),
             virtiofs_configs: vec![],
             additional_mounts: vec![],
             virtio_serial_devices: vec![],
-            virtio_serial_pipes: vec![],
             virtio_blk_devices: vec![],
             display_mode: DisplayMode::default(),
             network_mode: NetworkMode::default(),
@@ -333,27 +327,6 @@ impl QemuConfig {
             }
         }
 
-        // Validate virtio serial devices
-        for serial_device in &self.virtio_serial_devices {
-            if serial_device.name.is_empty() {
-                return Err(eyre!("Virtio serial device name cannot be empty"));
-            }
-            let output_dir = std::path::Path::new(&serial_device.output_file)
-                .parent()
-                .ok_or_else(|| {
-                    eyre!(
-                        "Invalid virtio serial output file path: {}",
-                        serial_device.output_file
-                    )
-                })?;
-            if !output_dir.exists() {
-                return Err(eyre!(
-                    "Virtio serial output directory does not exist: {}",
-                    output_dir.display()
-                ));
-            }
-        }
-
         // Validate virtiofs mounts
         for mount in &self.additional_mounts {
             if mount.tag.is_empty() {
@@ -405,10 +378,23 @@ impl QemuConfig {
     }
 
     /// Add a virtio-serial output device
-    pub fn add_virtio_serial_out(&mut self, name: String, output_file: String) -> &mut Self {
-        self.virtio_serial_devices
-            .push(VirtioSerialOut { name, output_file });
+    pub fn add_virtio_serial_out(
+        &mut self,
+        name: &str,
+        output_file: String,
+        append: bool,
+    ) -> &mut Self {
+        self.virtio_serial_devices.push(VirtioSerialOut {
+            name: name.to_owned(),
+            output_file,
+            append,
+        });
         self
+    }
+
+    pub fn add_fd(&mut self, fd: Arc<OwnedFd>) -> String {
+        self.fdset.push(fd);
+        format!("/dev/fdset/{}", self.fdset.len())
     }
 
     /// Create a virtio-serial device with pipe-based output
@@ -417,12 +403,10 @@ impl QemuConfig {
         use rustix::pipe::pipe;
         let (read_fd, write_fd) = pipe().context("Failed to create pipe")?;
 
-        let device = VirtioSerialPipe {
-            name: name.to_owned(),
-            write_fd,
-        };
+        let fdset = self.add_fd(Arc::new(write_fd));
 
-        self.virtio_serial_pipes.push(device);
+        // Use append=true for fdsets to avoid truncation issues
+        self.add_virtio_serial_out(name, fdset, true);
         Ok(read_fd)
     }
 
@@ -525,6 +509,33 @@ fn spawn(
         "-numa",
         "node,memdev=mem",
     ]);
+
+    for (idx, fd) in config.fdset.iter().enumerate() {
+        let fd_id = 100 + idx as u32; // Start at 100 to avoid conflicts
+        let set_id = idx + 1; // fdset starts at 1
+
+        // Pass the write FD to QEMU
+        cmd.take_fd_n(Arc::clone(fd), fd_id as i32);
+
+        cmd.args(["-add-fd", &format!("fd={},set={}", fd_id, set_id)]);
+    }
+
+    // Add virtio-blk block devices
+    for (idx, blk_device) in config.virtio_blk_devices.iter().enumerate() {
+        let drive_id = format!("drive{}", idx);
+        cmd.args([
+            "-drive",
+            &format!(
+                "file={},format=raw,if=none,id={}",
+                blk_device.disk_file, drive_id
+            ),
+            "-device",
+            &format!(
+                "virtio-blk-pci,drive={},serial={}",
+                drive_id, blk_device.serial
+            ),
+        ]);
+    }
 
     // Configure boot mode
     match &config.boot_mode {
@@ -633,9 +644,19 @@ fn spawn(
 
         for (idx, serial_device) in config.virtio_serial_devices.iter().enumerate() {
             let char_id = format!("serial_char{}", idx);
+            // Build chardev args with optional append
+            let chardev_args = if serial_device.append {
+                format!(
+                    "file,id={},path={},append=on",
+                    char_id, serial_device.output_file
+                )
+            } else {
+                format!("file,id={},path={}", char_id, serial_device.output_file)
+            };
+
             cmd.args([
                 "-chardev",
-                &format!("file,id={},path={}", char_id, serial_device.output_file),
+                &chardev_args,
                 "-device",
                 &format!(
                     "virtserialport,chardev={},name={}",
@@ -643,61 +664,6 @@ fn spawn(
                 ),
             ]);
         }
-    }
-
-    // Add virtio-serial devices with pipes using fd-set
-    if !config.virtio_serial_pipes.is_empty() {
-        // Add the virtio-serial controller if not already added
-        if config.virtio_serial_devices.is_empty() {
-            cmd.args(["-device", "virtio-serial"]);
-        }
-
-        for (idx, serial_pipe) in config.virtio_serial_pipes.iter().enumerate() {
-            let fd_id = 100 + idx as u32; // Start at 100 to avoid conflicts
-            let set_id = idx + 1; // fdset starts at 1
-
-            // Pass the write FD to QEMU
-            cmd.take_fd_n(
-                Arc::new(
-                    serial_pipe
-                        .write_fd
-                        .try_clone()
-                        .context("Failed to clone write fd")?,
-                ),
-                fd_id as i32,
-            );
-
-            // Build fd-set and chardev arguments using CoreOS pattern
-            let char_id = format!("serial_pipe_char{}", idx);
-            cmd.args([
-                "-add-fd",
-                &format!("fd={},set={}", fd_id, set_id),
-                "-chardev",
-                &format!("file,id={},path=/dev/fdset/{},append=on", char_id, set_id),
-                "-device",
-                &format!(
-                    "virtserialport,chardev={},name={}",
-                    char_id, serial_pipe.name
-                ),
-            ]);
-        }
-    }
-
-    // Add virtio-blk block devices
-    for (idx, blk_device) in config.virtio_blk_devices.iter().enumerate() {
-        let drive_id = format!("drive{}", idx);
-        cmd.args([
-            "-drive",
-            &format!(
-                "file={},format=raw,if=none,id={}",
-                blk_device.disk_file, drive_id
-            ),
-            "-device",
-            &format!(
-                "virtio-blk-pci,drive={},serial={}",
-                drive_id, blk_device.serial
-            ),
-        ]);
     }
 
     // Configure network (only User mode supported now)
@@ -953,7 +919,7 @@ mod tests {
             "/test/socket".to_string(),
         );
         config
-            .add_virtio_serial_out("serial0".to_string(), "/tmp/output.txt".to_string())
+            .add_virtio_serial_out("serial0", "/tmp/output.txt".to_string(), false)
             .set_kernel_cmdline(vec!["console=ttyS0".to_string()])
             .set_console(true);
 
