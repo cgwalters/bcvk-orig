@@ -11,12 +11,20 @@ use color_eyre::Result;
 pub mod create;
 pub mod domain;
 pub mod list;
+pub mod run;
 pub mod ssh;
 pub mod upload;
 
 /// libvirt subcommands for managing bootc disk images and domains
 #[derive(Debug, Subcommand)]
 pub enum LibvirtCommands {
+    /// Run a bootable container as a persistent VM
+    ///
+    /// Creates a complete libvirt-managed VM from a bootc container image.
+    /// Automatically handles disk image creation, domain setup, SSH key injection,
+    /// and VM lifecycle management. This is equivalent to 'bcvk pb run'.
+    Run(run::LibvirtRunOpts),
+
     /// Upload bootc disk images to libvirt with metadata annotations
     ///
     /// Combines run-install with libvirt integration to create and upload
@@ -49,6 +57,7 @@ pub enum LibvirtCommands {
 impl LibvirtCommands {
     pub fn run(self) -> Result<()> {
         match self {
+            LibvirtCommands::Run(opts) => run::run(opts),
             LibvirtCommands::Upload(opts) => upload::run(opts),
             LibvirtCommands::Create(opts) => create::run(opts),
             LibvirtCommands::List(opts) => list::run(opts),

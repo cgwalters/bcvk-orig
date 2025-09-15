@@ -3,7 +3,7 @@
 //! This module provides cross-architecture support for libvirt domain creation
 //! and QEMU emulator selection, avoiding hardcoded architecture assumptions.
 
-use color_eyre::{eyre::Context, Result};
+use color_eyre::Result;
 
 /// Architecture configuration for libvirt domains and QEMU
 #[derive(Debug, Clone)]
@@ -110,6 +110,7 @@ impl ArchConfig {
     }
 
     /// Check if this architecture supports VMport (x86_64 specific feature)
+    #[allow(dead_code)]
     pub fn supports_vmport(&self) -> bool {
         self.arch == "x86_64"
     }
@@ -125,16 +126,19 @@ impl ArchConfig {
 }
 
 /// Detect host architecture string (shorthand for ArchConfig::detect().arch)
+#[allow(dead_code)]
 pub fn host_arch() -> Result<&'static str> {
     Ok(ArchConfig::detect()?.arch)
 }
 
 /// Check if running on x86_64 architecture
+#[allow(dead_code)]
 pub fn is_x86_64() -> bool {
     std::env::consts::ARCH == "x86_64"
 }
 
 /// Check if running on ARM64/AArch64 architecture  
+#[allow(dead_code)]
 pub fn is_aarch64() -> bool {
     std::env::consts::ARCH == "aarch64"
 }

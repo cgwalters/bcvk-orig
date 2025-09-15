@@ -8,13 +8,12 @@ use base64::Engine;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::fs::Permissions;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::Command;
-use std::{fs, io::Write};
 use tempfile;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Configuration options for SSH connection to libvirt domain
 #[derive(Debug, Parser)]

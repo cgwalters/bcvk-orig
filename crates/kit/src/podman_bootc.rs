@@ -4,11 +4,9 @@
 //! while leveraging our existing libvirt and QEMU infrastructure.
 
 mod domain_list;
-mod vm_registry;
 
 // Re-export everything from the main module
 pub use self::domain_list::*;
-pub use self::vm_registry::*;
 
 use clap::{Parser, Subcommand};
 use color_eyre::{eyre::Context, Result};
@@ -90,7 +88,7 @@ pub struct RunOpts {
 #[derive(Parser)]
 pub struct SshOpts {
     /// Name of the VM to connect to
-    pub name: Option<String>,
+    pub name: String,
 
     /// Command to execute in the VM
     #[clap(long)]
@@ -180,60 +178,186 @@ impl PodmanBootcOpts {
     }
 }
 
+/// Get the path of the default libvirt storage pool
+fn get_libvirt_storage_pool_path() -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    // Try user session first (qemu:///session)
+    let output = Command::new("virsh")
+        .args(&["-c", "qemu:///session", "pool-dumpxml", "default"])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            // Try system session (qemu:///system)
+            Command::new("virsh")
+                .args(&["-c", "qemu:///system", "pool-dumpxml", "default"])
+                .output()
+                .with_context(|| "Failed to query libvirt storage pool")?
+        }
+    };
+
+    if !output.status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to get default storage pool info"
+        ));
+    }
+
+    let xml = String::from_utf8(output.stdout).with_context(|| "Invalid UTF-8 in virsh output")?;
+
+    // Extract path from XML
+    // Looking for: <path>/some/path</path>
+    let start_tag = "<path>";
+    let end_tag = "</path>";
+
+    if let Some(start_pos) = xml.find(start_tag) {
+        let start = start_pos + start_tag.len();
+        if let Some(end_pos) = xml[start..].find(end_tag) {
+            let path_str = &xml[start..start + end_pos];
+            return Ok(PathBuf::from(path_str.trim()));
+        }
+    }
+
+    Err(color_eyre::eyre::eyre!(
+        "Could not find path in storage pool XML"
+    ))
+}
+
+/// Generate a unique VM name from an image name
+fn generate_unique_vm_name(image: &str, existing_domains: &[String]) -> String {
+    // Extract image name from full image path
+    let base_name = if let Some(last_slash) = image.rfind('/') {
+        &image[last_slash + 1..]
+    } else {
+        image
+    };
+
+    // Remove tag if present
+    let base_name = if let Some(colon) = base_name.find(':') {
+        &base_name[..colon]
+    } else {
+        base_name
+    };
+
+    // Sanitize name (replace invalid characters with hyphens)
+    let sanitized: String = base_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    // Find unique name by appending numbers
+    let mut candidate = sanitized.clone();
+    let mut counter = 1;
+
+    while existing_domains.contains(&candidate) {
+        counter += 1;
+        candidate = format!("{}-{}", sanitized, counter);
+    }
+
+    candidate
+}
+
+/// Create disk path for a VM using image hash as suffix
+fn create_disk_path(vm_name: &str, source_image: &str) -> Result<std::path::PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fs;
+    use std::hash::{Hash, Hasher};
+    use std::path::PathBuf;
+
+    // Query libvirt for the default storage pool path
+    let base_dir = get_libvirt_storage_pool_path().unwrap_or_else(|_| {
+        // Fallback to standard paths if we can't query libvirt
+        if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".local/share/libvirt/images")
+        } else {
+            PathBuf::from("/var/lib/libvirt/images")
+        }
+    });
+
+    // Ensure the directory exists
+    fs::create_dir_all(&base_dir)
+        .with_context(|| format!("Failed to create directory: {:?}", base_dir))?;
+
+    // Generate a hash of the source image for uniqueness
+    let mut hasher = DefaultHasher::new();
+    source_image.hash(&mut hasher);
+    let image_hash = hasher.finish();
+    let hash_prefix = format!("{:x}", image_hash)
+        .chars()
+        .take(8)
+        .collect::<String>();
+
+    // Try to find a unique filename
+    let mut counter = 0;
+    loop {
+        let disk_name = if counter == 0 {
+            format!("{}-{}.raw", vm_name, hash_prefix)
+        } else {
+            format!("{}-{}-{}.raw", vm_name, hash_prefix, counter)
+        };
+
+        let disk_path = base_dir.join(&disk_name);
+
+        // Check if file exists
+        if !disk_path.exists() {
+            return Ok(disk_path);
+        }
+
+        counter += 1;
+        if counter > 100 {
+            return Err(color_eyre::eyre::eyre!(
+                "Could not create unique disk path after 100 attempts"
+            ));
+        }
+    }
+}
+
 /// Create and run a bootable container VM
+///
+/// This function now delegates to the actual implementation
+/// to maintain compatibility while centralizing the functionality.
 pub fn run_vm(opts: RunOpts) -> Result<()> {
+    run_vm_impl(opts)
+}
+
+/// Create and run a bootable container VM (original implementation)
+///
+/// This is the original implementation that is now called from both
+/// `bcvk pb run` and `bcvk libvirt run`.
+pub fn run_vm_impl(opts: RunOpts) -> Result<()> {
     use crate::install_options::InstallOptions;
     use crate::run_ephemeral::CommonVmOpts;
     use crate::to_disk::ToDiskOpts;
 
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-
-    let mut registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    let lister = DomainLister::new();
+    let existing_domains = lister
+        .list_all_domains()
+        .with_context(|| "Failed to list existing domains")?;
 
     // Generate or validate VM name
     let vm_name = match &opts.name {
         Some(name) => {
-            if !registry.is_name_available(name) {
+            if existing_domains.contains(name) {
                 return Err(color_eyre::eyre::eyre!("VM '{}' already exists", name));
             }
             name.clone()
         }
-        None => registry.generate_vm_name(&opts.image),
+        None => generate_unique_vm_name(&opts.image, &existing_domains),
     };
 
     println!("Creating VM '{}' from image '{}'...", vm_name, opts.image);
 
-    // Create VM metadata
-    let mut vm = VmMetadata::new(
-        vm_name.clone(),
-        opts.image.clone(),
-        opts.memory,
-        opts.cpus,
-        opts.disk_size,
-        opts.filesystem.clone(),
-        opts.network.clone(),
-        opts.port_mappings.clone(),
-        opts.volumes.clone(),
-    );
-
-    // Set disk path in the podman-bootc cache directory
-    let disk_path = manager
-        .create_disk_path(&vm_name)
-        .with_context(|| "Failed to create disk path")?;
-    vm.set_disk_path(disk_path.clone());
-
-    // Add VM to registry early so we track it
-    registry
-        .add_vm(vm.clone())
-        .with_context(|| "Failed to add VM to registry")?;
-
-    // Save registry
-    manager
-        .save_registry(&registry)
-        .with_context(|| "Failed to save VM registry")?;
+    // Create disk path in the standard libvirt images directory
+    let disk_path =
+        create_disk_path(&vm_name, &opts.image).with_context(|| "Failed to create disk path")?;
 
     // Phase 1: Create bootable disk image using to_disk
     println!("📀 Creating bootable disk image...");
@@ -273,14 +397,7 @@ pub fn run_vm(opts: RunOpts) -> Result<()> {
     create_libvirt_domain_from_disk(&vm_name, &disk_path, &opts)
         .with_context(|| "Failed to create libvirt domain")?;
 
-    // Update VM status and metadata
-    let mut updated_registry = manager.load_registry()?;
-    if let Some(vm_ref) = updated_registry.get_vm_mut(&vm_name) {
-        vm_ref.set_libvirt_domain(vm_name.clone());
-        vm_ref.set_status(VmStatus::Running); // Always running now
-                                              // TODO: Set SSH port from libvirt domain info
-    }
-    manager.save_registry(&updated_registry)?;
+    // VM is now managed by libvirt, no need to track separately
 
     println!("✅ VM '{}' created successfully!", vm_name);
     println!("  Image: {}", opts.image);
@@ -288,12 +405,16 @@ pub fn run_vm(opts: RunOpts) -> Result<()> {
     println!("  Memory: {} MB", opts.memory);
     println!("  CPUs: {}", opts.cpus);
 
-    println!("  Status: running");
-    println!("\n🔗 Use 'bcvk pb ssh {}' to connect", vm_name);
-
-    println!("📝 Use 'bcvk pb list --all' to see all VMs");
-
-    Ok(())
+    if opts.ssh {
+        ssh_vm(SshOpts {
+            name: vm_name,
+            command: None,
+            args: Default::default(),
+        })
+    } else {
+        println!("\n🔗 Use 'bcvk pb ssh {}' to connect", vm_name);
+        Ok(())
+    }
 }
 
 /// Find an available SSH port for port forwarding using random allocation
@@ -332,7 +453,6 @@ fn create_libvirt_domain_from_disk(
     use crate::libvirt::domain::DomainBuilder;
     use crate::ssh::generate_ssh_keypair;
     use crate::sshcred::smbios_cred_for_root_ssh;
-    use base64::Engine;
     use std::process::Command;
     use tracing::info;
 
@@ -441,21 +561,6 @@ pub fn ssh_vm(opts: SshOpts) -> Result<()> {
     // Use libvirt as the source of truth for domain lookup
     let lister = DomainLister::new();
 
-    // Find target VM
-    let target_name = match opts.name {
-        Some(name) => name,
-        None => {
-            // Get the first running domain if no name specified
-            let running_domains = lister
-                .list_running_bootc_domains()
-                .with_context(|| "Failed to list running bootc domains from libvirt")?;
-            if running_domains.is_empty() {
-                return Err(color_eyre::eyre::eyre!("No running VMs found"));
-            }
-            running_domains[0].name.clone()
-        }
-    };
-
     // Verify the domain exists and is running
     let domains = lister
         .list_bootc_domains()
@@ -463,8 +568,8 @@ pub fn ssh_vm(opts: SshOpts) -> Result<()> {
 
     let vm = domains
         .iter()
-        .find(|d| d.name == target_name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", target_name))?;
+        .find(|d| d.name == opts.name)
+        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
 
     if !vm.is_running() {
         return Err(color_eyre::eyre::eyre!(
@@ -577,18 +682,15 @@ pub fn list_vms(opts: ListOpts) -> Result<()> {
 pub fn stop_vm(opts: StopOpts) -> Result<()> {
     use std::process::Command;
 
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let mut registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    let lister = DomainLister::new();
 
-    let vm = registry
-        .get_vm(&opts.name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+    // Check if domain exists and get its state
+    let state = lister
+        .get_domain_state(&opts.name)
+        .map_err(|_| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
 
-    if !vm.is_running() {
-        println!("VM '{}' is already stopped", opts.name);
+    if state != "running" {
+        println!("VM '{}' is already stopped (state: {})", opts.name, state);
         return Ok(());
     }
 
@@ -615,13 +717,7 @@ pub fn stop_vm(opts: StopOpts) -> Result<()> {
         ));
     }
 
-    // Update VM status
-    registry
-        .update_vm_status(&opts.name, VmStatus::Stopped)
-        .with_context(|| "Failed to update VM status")?;
-    manager
-        .save_registry(&registry)
-        .with_context(|| "Failed to save VM registry")?;
+    // VM status is now managed by libvirt
 
     println!("✅ VM '{}' stopped successfully", opts.name);
     Ok(())
@@ -631,17 +727,14 @@ pub fn stop_vm(opts: StopOpts) -> Result<()> {
 pub fn start_vm(opts: StartOpts) -> Result<()> {
     use std::process::Command;
 
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let mut registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    let lister = DomainLister::new();
 
-    let vm = registry
-        .get_vm(&opts.name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+    // Check if domain exists and get its state
+    let state = lister
+        .get_domain_state(&opts.name)
+        .map_err(|_| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
 
-    if vm.is_running() {
+    if state == "running" {
         println!("VM '{}' is already running", opts.name);
         if opts.ssh {
             println!("🔗 Connecting to running VM...");
@@ -667,13 +760,7 @@ pub fn start_vm(opts: StartOpts) -> Result<()> {
         ));
     }
 
-    // Update VM status
-    registry
-        .update_vm_status(&opts.name, VmStatus::Running)
-        .with_context(|| "Failed to update VM status")?;
-    manager
-        .save_registry(&registry)
-        .with_context(|| "Failed to save VM registry")?;
+    // VM status is now managed by libvirt
 
     println!("✅ VM '{}' started successfully", opts.name);
 
@@ -688,18 +775,20 @@ pub fn start_vm(opts: StartOpts) -> Result<()> {
 pub fn remove_vm(opts: RemoveOpts) -> Result<()> {
     use std::process::Command;
 
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let mut registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    let lister = DomainLister::new();
 
-    let vm = registry
-        .get_vm(&opts.name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+    // Check if domain exists and get its state
+    let state = lister
+        .get_domain_state(&opts.name)
+        .map_err(|_| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+
+    // Get domain info for display
+    let domain_info = lister
+        .get_domain_info(&opts.name)
+        .with_context(|| format!("Failed to get info for VM '{}'", opts.name))?;
 
     // Check if VM is running
-    if vm.is_running() {
+    if state == "running" {
         if opts.stop {
             println!("🛑 Stopping running VM '{}'...", opts.name);
             let output = Command::new("virsh")
@@ -729,9 +818,13 @@ pub fn remove_vm(opts: RemoveOpts) -> Result<()> {
             "This will permanently delete VM '{}' and its data:",
             opts.name
         );
-        println!("  Image: {}", vm.image);
-        println!("  Disk: {}", vm.disk_path.display());
-        println!("  Status: {}", vm.status_string());
+        if let Some(ref image) = domain_info.image {
+            println!("  Image: {}", image);
+        }
+        if let Some(ref disk_path) = domain_info.disk_path {
+            println!("  Disk: {}", disk_path);
+        }
+        println!("  Status: {}", domain_info.status_string());
         println!();
         println!("Are you sure? This cannot be undone. Use --force to skip this prompt.");
         return Ok(());
@@ -740,37 +833,19 @@ pub fn remove_vm(opts: RemoveOpts) -> Result<()> {
     println!("🗑️  Removing VM '{}'...", opts.name);
 
     // Remove libvirt domain
-    if let Some(ref domain_name) = vm.libvirt_domain {
-        println!("  Removing libvirt domain...");
-        let output = Command::new("virsh")
-            .args(&["undefine", domain_name])
-            .output()
-            .with_context(|| "Failed to undefine libvirt domain")?;
+    println!("  Removing libvirt domain...");
+    let output = Command::new("virsh")
+        .args(&["undefine", &opts.name, "--remove-all-storage"])
+        .output()
+        .with_context(|| "Failed to undefine libvirt domain")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("Warning: Failed to remove libvirt domain: {}", stderr);
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to remove libvirt domain: {}",
+            stderr
+        ));
     }
-
-    // Get VM metadata before removal for cleanup
-    let vm_to_remove = vm.clone();
-
-    // Remove from registry
-    registry
-        .remove_vm(&opts.name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found in registry", opts.name))?;
-
-    // Clean up files
-    println!("  Removing disk image...");
-    manager
-        .cleanup_vm_files(&vm_to_remove)
-        .with_context(|| "Failed to clean up VM files")?;
-
-    // Save registry
-    manager
-        .save_registry(&registry)
-        .with_context(|| "Failed to save VM registry")?;
 
     println!("✅ VM '{}' removed successfully", opts.name);
     Ok(())
@@ -778,26 +853,34 @@ pub fn remove_vm(opts: RemoveOpts) -> Result<()> {
 
 /// Show detailed information about a VM
 pub fn inspect_vm(opts: InspectOpts) -> Result<()> {
-    let manager =
-        VmRegistryManager::new().with_context(|| "Failed to initialize VM registry manager")?;
-    let registry = manager
-        .load_registry()
-        .with_context(|| "Failed to load VM registry")?;
+    let lister = DomainLister::new();
 
-    let vm = registry
-        .get_vm(&opts.name)
-        .ok_or_else(|| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+    // Get domain info
+    let vm = lister
+        .get_domain_info(&opts.name)
+        .map_err(|_| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
 
     match opts.format.as_str() {
         "yaml" => {
             println!("name: {}", vm.name);
-            println!("image: {}", vm.image);
+            if let Some(ref image) = vm.image {
+                println!("image: {}", image);
+            }
             println!("status: {}", vm.status_string());
+            if let Some(memory) = vm.memory_mb {
+                println!("memory_mb: {}", memory);
+            }
+            if let Some(vcpus) = vm.vcpus {
+                println!("vcpus: {}", vcpus);
+            }
+            if let Some(ref disk_path) = vm.disk_path {
+                println!("disk_path: {}", disk_path);
+            }
         }
         "json" => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(vm)
+                serde_json::to_string_pretty(&vm)
                     .with_context(|| "Failed to serialize VM as JSON")?
             );
         }
