@@ -7,6 +7,7 @@ use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR};
 use crate::to_disk::{run as to_disk, ToDiskOpts};
 use crate::{images, utils};
+use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
@@ -101,11 +102,11 @@ impl LibvirtUploadOpts {
     /// Create a temporary file path for the disk image
     /// Returns a temporary directory and the disk path within it.
     /// The directory ensures cleanup when dropped, and the disk path doesn't exist yet.
-    fn get_temp_disk_path(&self) -> Result<(tempfile::TempDir, std::path::PathBuf)> {
+    fn get_temp_disk_path(&self) -> Result<(tempfile::TempDir, Utf8PathBuf)> {
         let temp_dir = tempfile::Builder::new()
             .prefix("bcvk-libvirt-upload")
             .tempdir()?;
-        let disk_path = temp_dir.path().join("disk.img");
+        let disk_path = temp_dir.path().join("disk.img").try_into().unwrap();
         Ok((temp_dir, disk_path))
     }
 
@@ -238,7 +239,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
 
     to_disk(install_opts)?;
 
-    opts.upload_to_libvirt(&temp_disk_path, disk_size, &image_digest)?;
+    opts.upload_to_libvirt(temp_disk_path.as_std_path(), disk_size, &image_digest)?;
 
     // Keep temp_dir alive until upload completes to prevent cleanup
     drop(temp_dir);

@@ -7,6 +7,7 @@ use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR};
 use crate::to_disk::{run as to_disk, ToDiskOpts};
 use crate::{images, utils};
+use camino::Utf8Path;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
@@ -248,7 +249,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
 
     // Phase 2: Create temporary disk path
     let td = tempfile::TempDir::new()?;
-    let td = td.path();
+    let td: &Utf8Path = td.path().try_into().unwrap();
     let temp_disk = td.join("disk.img");
     info!("Using temporary disk: {temp_disk:?}");
 
@@ -278,7 +279,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
 
     // Phase 4: Upload to libvirt (unless skipped)
     if !opts.skip_upload {
-        opts.upload_to_libvirt(&temp_disk, disk_size)?;
+        opts.upload_to_libvirt(temp_disk.as_std_path(), disk_size)?;
         opts.add_volume_metadata()?;
 
         let volume_name = opts.get_volume_name();

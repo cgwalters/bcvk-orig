@@ -5,9 +5,12 @@
 
 mod domain_list;
 
+use std::path::Path;
+
 // Re-export everything from the main module
 pub use self::domain_list::*;
 
+use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use color_eyre::{eyre::Context, Result};
 
@@ -266,7 +269,7 @@ fn generate_unique_vm_name(image: &str, existing_domains: &[String]) -> String {
 }
 
 /// Create disk path for a VM using image hash as suffix
-fn create_disk_path(vm_name: &str, source_image: &str) -> Result<std::path::PathBuf> {
+fn create_disk_path(vm_name: &str, source_image: &str) -> Result<Utf8PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
     use std::hash::{Hash, Hasher};
@@ -304,7 +307,7 @@ fn create_disk_path(vm_name: &str, source_image: &str) -> Result<std::path::Path
             format!("{}-{}-{}.raw", vm_name, hash_prefix, counter)
         };
 
-        let disk_path = base_dir.join(&disk_name);
+        let disk_path: Utf8PathBuf = base_dir.join(&disk_name).try_into().unwrap();
 
         // Check if file exists
         if !disk_path.exists() {
@@ -388,20 +391,20 @@ pub fn run_vm_impl(opts: RunOpts) -> Result<()> {
     // Run the disk creation
     crate::to_disk::run(to_disk_opts).with_context(|| "Failed to create bootable disk image")?;
 
-    println!("✅ Disk image created at: {}", disk_path.display());
+    println!("✅ Disk image created at: {}", disk_path);
 
     // Phase 2: Create libvirt domain
     println!("🖥️  Creating libvirt domain...");
 
     // Create the domain directly (simpler than using libvirt/create for files)
-    create_libvirt_domain_from_disk(&vm_name, &disk_path, &opts)
+    create_libvirt_domain_from_disk(&vm_name, disk_path.as_std_path(), &opts)
         .with_context(|| "Failed to create libvirt domain")?;
 
     // VM is now managed by libvirt, no need to track separately
 
     println!("✅ VM '{}' created successfully!", vm_name);
     println!("  Image: {}", opts.image);
-    println!("  Disk: {}", disk_path.display());
+    println!("  Disk: {}", disk_path);
     println!("  Memory: {} MB", opts.memory);
     println!("  CPUs: {}", opts.cpus);
 
@@ -447,7 +450,7 @@ fn find_available_ssh_port() -> u16 {
 /// Create a libvirt domain directly from a disk image file
 fn create_libvirt_domain_from_disk(
     domain_name: &str,
-    disk_path: &std::path::PathBuf,
+    disk_path: &Path,
     opts: &RunOpts,
 ) -> Result<()> {
     use crate::libvirt::domain::DomainBuilder;

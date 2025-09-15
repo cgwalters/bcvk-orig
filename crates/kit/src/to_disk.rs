@@ -76,8 +76,10 @@
 use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run_synchronous as run_ephemeral, CommonVmOpts, RunEphemeralOpts};
 use crate::{images, utils};
+use camino::Utf8PathBuf;
 use clap::Parser;
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::eyre::Context;
+use color_eyre::Result;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use tracing::debug;
@@ -91,7 +93,7 @@ pub struct ToDiskOpts {
     pub source_image: String,
 
     /// Target disk/device path
-    pub target_disk: PathBuf,
+    pub target_disk: Utf8PathBuf,
 
     /// Installation options (filesystem, root-size, storage-path)
     #[clap(flatten)]
@@ -130,37 +132,6 @@ impl ToDiskOpts {
         } else {
             utils::detect_container_storage_path()
         }
-    }
-
-    /// Validate and prepare the target disk image file
-    ///
-    /// Ensures the target is suitable for use as a disk image and creates parent directories if needed.
-    fn prepare_target_disk(&self) -> Result<()> {
-        let path = &self.target_disk;
-
-        // Error out if target disk already exists
-        if path.exists() {
-            return Err(eyre!(
-                "Target disk already exists: {:?}. Remove it first or use a different path.",
-                path
-            ));
-        } else {
-            // Validate parent directory exists or can be created
-            if let Some(parent) = path.parent() {
-                if !parent.exists() {
-                    // Check if we can create the parent directory by attempting to create it
-                    // but first check if parent's parent exists
-                    if let Some(grandparent) = parent.parent() {
-                        if !grandparent.exists() {
-                            return Err(eyre!("Parent directory does not exist: {:?}", parent));
-                        }
-                    }
-                }
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-
-        Ok(())
     }
 
     /// Generate the complete bootc installation command
@@ -223,8 +194,6 @@ impl ToDiskOpts {
 /// for details on the installation workflow and architecture.
 pub fn run(opts: ToDiskOpts) -> Result<()> {
     // Phase 1: Validation and preparation
-    // Ensure target disk path is valid and create parent directories if needed
-    opts.prepare_target_disk()?;
     // Resolve container storage path (auto-detect or validate specified path)
     let storage_path = opts.get_storage_path()?;
 
@@ -241,26 +210,14 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         }
     }
 
-    // Phase 2: Target disk preparation
-    // Create sparse disk file with calculated size if it doesn't exist
-    if !opts.target_disk.exists() {
-        let disk_size = opts.calculate_disk_size()?;
-        debug!(
-            "Creating target disk file: {:?} (size: {} bytes)",
-            opts.target_disk, disk_size
-        );
+    let disk_size = opts.calculate_disk_size()?;
 
-        // Create sparse file - only allocates space as data is written
-        let file = std::fs::File::create(&opts.target_disk)?;
-        file.set_len(disk_size)?;
-
-        if opts.common.debug {
-            println!(
-                "Created target disk file: {:?} (size: {} bytes)",
-                opts.target_disk, disk_size
-            );
-        }
-    }
+    // Create sparse file - only allocates space as data is written
+    let file = std::fs::File::create(&opts.target_disk)
+        .with_context(|| format!("Opening {}", opts.target_disk))?;
+    file.set_len(disk_size)?;
+    // TODO pass to qemu via fdset
+    drop(file);
 
     // Phase 3: Installation command generation
     // Generate complete script including storage setup and bootc install
@@ -287,7 +244,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         systemd_units_dir: None,        // No custom systemd units
         log_cmdline: opts.common.debug, // Log kernel command line if debug
         bind_storage_ro: true,          // Mount host container storage read-only
-        mount_disk_files: vec![format!("{}:output", opts.target_disk.display())], // Attach target disk
+        mount_disk_files: vec![format!("{}:output", opts.target_disk)], // Attach target disk
     };
 
     // Phase 5: Final VM configuration and execution
@@ -307,7 +264,13 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
     // 2. Mount host storage and target disk
     // 3. Execute the installation script
     // 4. Shut down automatically after completion
-    run_ephemeral(final_opts)
+    match run_ephemeral(final_opts) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&opts.target_disk);
+            Err(e)
+        }
+    }
 }
 
 // Note: Unit tests should not launch containers, VMs, or perform other system-level operations.
@@ -316,30 +279,6 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_prepare_target_disk_file() -> Result<()> {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new()?;
-        let target_disk = temp_dir.path().join("test-disk.img");
-
-        let opts = ToDiskOpts {
-            source_image: "test:latest".to_string(),
-            target_disk,
-            label: Default::default(),
-            install: InstallOptions {
-                filesystem: Some("ext4".to_string()),
-                root_size: None,
-                storage_path: None,
-            },
-            disk_size: None,
-            common: CommonVmOpts::default(),
-        };
-
-        opts.prepare_target_disk()?;
-        Ok(())
-    }
 
     #[test]
     fn test_calculate_disk_size() -> Result<()> {
