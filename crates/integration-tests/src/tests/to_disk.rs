@@ -14,6 +14,7 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
+use camino::Utf8PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -25,12 +26,10 @@ pub fn test_to_disk() {
 
     // Create a temporary disk image file
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let disk_path = temp_dir.path().join("test-disk.img");
+    let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
+        .expect("temp path is not UTF-8");
 
-    println!(
-        "Running installation to temporary disk: {}",
-        disk_path.display()
-    );
+    println!("Running installation to temporary disk: {}", disk_path);
 
     // Run the installation with timeout
     let output = Command::new("timeout")
@@ -41,7 +40,7 @@ pub fn test_to_disk() {
             "--label",
             INTEGRATION_TEST_LABEL,
             "quay.io/centos-bootc/centos-bootc:stream10",
-            disk_path.to_str().unwrap(),
+            disk_path.as_str(),
         ])
         .output()
         .expect("Failed to run bcvk to-disk");
@@ -62,14 +61,14 @@ pub fn test_to_disk() {
         stderr
     );
 
-    let metadata = disk_path.metadata().expect("Failed to get disk metadata");
+    let metadata = std::fs::metadata(&disk_path).expect("Failed to get disk metadata");
     assert!(metadata.len() > 0);
 
     // Verify the disk has partitions using sfdisk -l
     println!("Verifying disk partitions with sfdisk -l");
     let sfdisk_output = Command::new("sfdisk")
         .arg("-l")
-        .arg(disk_path.to_str().unwrap())
+        .arg(disk_path.as_str())
         .output()
         .expect("Failed to run sfdisk");
 
@@ -95,9 +94,8 @@ pub fn test_to_disk() {
     );
 
     // Look for evidence of bootc partitions (EFI, boot, root, etc.)
-    let disk_path_str = disk_path.to_string_lossy();
     let has_partitions = sfdisk_stdout.lines().any(|line| {
-        line.contains(&*disk_path_str) && (line.contains("Linux") || line.contains("EFI"))
+        line.contains(disk_path.as_str()) && (line.contains("Linux") || line.contains("EFI"))
     });
 
     assert!(

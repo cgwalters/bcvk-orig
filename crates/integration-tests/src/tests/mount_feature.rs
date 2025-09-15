@@ -14,8 +14,8 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
+use camino::Utf8Path;
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -23,7 +23,7 @@ use crate::{get_bck_command, get_test_image, INTEGRATION_TEST_LABEL};
 
 /// Create a systemd unit that verifies a mount exists and contains expected content
 fn create_mount_verify_unit(
-    unit_dir: &Path,
+    unit_dir: &Utf8Path,
     mount_name: &str,
     expected_file: &str,
     expected_content: &str,
@@ -51,7 +51,7 @@ StandardError=journal+console
 
 /// Create a systemd unit that tries to write to a mount to verify read-only status
 fn create_ro_mount_verify_unit(
-    unit_dir: &Path,
+    unit_dir: &Utf8Path,
     mount_name: &str,
     expected_file: &str,
 ) -> std::io::Result<()> {
@@ -81,23 +81,22 @@ pub fn test_mount_feature_bind() {
 
     // Create a temporary directory to test bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let test_file_path = temp_dir.path().join("test.txt");
+    let temp_dir_path = Utf8Path::from_path(temp_dir.path()).expect("temp dir path is not utf8");
+    let test_file_path = temp_dir_path.join("test.txt");
     let test_content = "Test content for bind mount";
     fs::write(&test_file_path, test_content).expect("Failed to write test file");
 
     // Create systemd units directory
     let units_dir = TempDir::new().expect("Failed to create units directory");
-    let system_dir = units_dir.path().join("system");
+    let units_dir_path = Utf8Path::from_path(units_dir.path()).expect("units dir path is not utf8");
+    let system_dir = units_dir_path.join("system");
     fs::create_dir(&system_dir).expect("Failed to create system directory");
 
     // Create verification unit
     create_mount_verify_unit(&system_dir, "testmount", "test.txt", test_content)
         .expect("Failed to create verify unit");
 
-    println!(
-        "Testing bind mount with temp directory: {}",
-        temp_dir.path().display()
-    );
+    println!("Testing bind mount with temp directory: {}", temp_dir_path);
 
     // Run with bind mount and verification unit
     let output = Command::new("timeout")
@@ -111,9 +110,9 @@ pub fn test_mount_feature_bind() {
             "--console",
             "-K",
             "--bind",
-            &format!("{}:testmount", temp_dir.path().display()),
+            &format!("{}:testmount", temp_dir_path),
             "--systemd-units",
-            units_dir.path().to_str().unwrap(),
+            units_dir_path.as_str(),
             "--karg",
             "systemd.unit=verify-mount-testmount.service",
             "--karg",
@@ -136,12 +135,14 @@ pub fn test_mount_feature_ro_bind() {
 
     // Create a temporary directory to test read-only bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let test_file_path = temp_dir.path().join("readonly.txt");
+    let temp_dir_path = Utf8Path::from_path(temp_dir.path()).expect("temp dir path is not utf8");
+    let test_file_path = temp_dir_path.join("readonly.txt");
     fs::write(&test_file_path, "Read-only content").expect("Failed to write test file");
 
     // Create systemd units directory
     let units_dir = TempDir::new().expect("Failed to create units directory");
-    let system_dir = units_dir.path().join("system");
+    let units_dir_path = Utf8Path::from_path(units_dir.path()).expect("units dir path is not utf8");
+    let system_dir = units_dir_path.join("system");
     fs::create_dir(&system_dir).expect("Failed to create system directory");
 
     // Create verification unit for read-only mount
@@ -150,7 +151,7 @@ pub fn test_mount_feature_ro_bind() {
 
     println!(
         "Testing read-only bind mount with temp directory: {}",
-        temp_dir.path().display()
+        temp_dir_path
     );
 
     // Run with read-only bind mount and verification unit
@@ -165,9 +166,9 @@ pub fn test_mount_feature_ro_bind() {
             "--console",
             "-K",
             "--ro-bind",
-            &format!("{}:romount", temp_dir.path().display()),
+            &format!("{}:romount", temp_dir_path),
             "--systemd-units",
-            units_dir.path().to_str().unwrap(),
+            units_dir_path.as_str(),
             "--karg",
             "systemd.unit=verify-ro-mount-romount.service",
             "--karg",

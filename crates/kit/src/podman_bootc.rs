@@ -5,12 +5,10 @@
 
 mod domain_list;
 
-use std::path::Path;
-
 // Re-export everything from the main module
 pub use self::domain_list::*;
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Parser, Subcommand};
 use color_eyre::{eyre::Context, Result};
 
@@ -182,8 +180,7 @@ impl PodmanBootcOpts {
 }
 
 /// Get the path of the default libvirt storage pool
-fn get_libvirt_storage_pool_path() -> Result<std::path::PathBuf> {
-    use std::path::PathBuf;
+fn get_libvirt_storage_pool_path() -> Result<Utf8PathBuf> {
     use std::process::Command;
 
     // Try user session first (qemu:///session)
@@ -219,7 +216,7 @@ fn get_libvirt_storage_pool_path() -> Result<std::path::PathBuf> {
         let start = start_pos + start_tag.len();
         if let Some(end_pos) = xml[start..].find(end_tag) {
             let path_str = &xml[start..start + end_pos];
-            return Ok(PathBuf::from(path_str.trim()));
+            return Ok(Utf8PathBuf::from(path_str.trim()));
         }
     }
 
@@ -273,20 +270,19 @@ fn create_disk_path(vm_name: &str, source_image: &str) -> Result<Utf8PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
     use std::hash::{Hash, Hasher};
-    use std::path::PathBuf;
 
     // Query libvirt for the default storage pool path
     let base_dir = get_libvirt_storage_pool_path().unwrap_or_else(|_| {
         // Fallback to standard paths if we can't query libvirt
         if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".local/share/libvirt/images")
+            Utf8PathBuf::from(home).join(".local/share/libvirt/images")
         } else {
-            PathBuf::from("/var/lib/libvirt/images")
+            Utf8PathBuf::from("/var/lib/libvirt/images")
         }
     });
 
     // Ensure the directory exists
-    fs::create_dir_all(&base_dir)
+    fs::create_dir_all(base_dir.as_std_path())
         .with_context(|| format!("Failed to create directory: {:?}", base_dir))?;
 
     // Generate a hash of the source image for uniqueness
@@ -307,7 +303,7 @@ fn create_disk_path(vm_name: &str, source_image: &str) -> Result<Utf8PathBuf> {
             format!("{}-{}-{}.raw", vm_name, hash_prefix, counter)
         };
 
-        let disk_path: Utf8PathBuf = base_dir.join(&disk_name).try_into().unwrap();
+        let disk_path = base_dir.join(&disk_name);
 
         // Check if file exists
         if !disk_path.exists() {
@@ -397,7 +393,7 @@ pub fn run_vm_impl(opts: RunOpts) -> Result<()> {
     println!("🖥️  Creating libvirt domain...");
 
     // Create the domain directly (simpler than using libvirt/create for files)
-    create_libvirt_domain_from_disk(&vm_name, disk_path.as_std_path(), &opts)
+    create_libvirt_domain_from_disk(&vm_name, &disk_path, &opts)
         .with_context(|| "Failed to create libvirt domain")?;
 
     // VM is now managed by libvirt, no need to track separately
@@ -450,7 +446,7 @@ fn find_available_ssh_port() -> u16 {
 /// Create a libvirt domain directly from a disk image file
 fn create_libvirt_domain_from_disk(
     domain_name: &str,
-    disk_path: &Path,
+    disk_path: &Utf8Path,
     opts: &RunOpts,
 ) -> Result<()> {
     use crate::libvirt::domain::DomainBuilder;
@@ -477,7 +473,10 @@ fn create_libvirt_domain_from_disk(
         .map_err(|e| color_eyre::eyre::eyre!("Failed to create temporary directory: {}", e))?;
 
     // Generate keypair
-    let keypair = generate_ssh_keypair(temp_dir.path(), "id_rsa")?;
+    let keypair = generate_ssh_keypair(
+        camino::Utf8Path::from_path(temp_dir.path()).unwrap(),
+        "id_rsa",
+    )?;
 
     // Read the key contents from the generated keypair
     let private_key_content = std::fs::read_to_string(&keypair.private_key_path)
@@ -499,7 +498,7 @@ fn create_libvirt_domain_from_disk(
         .with_name(domain_name)
         .with_memory(opts.memory as u64)
         .with_vcpus(opts.cpus)
-        .with_disk(&disk_path.to_string_lossy())
+        .with_disk(disk_path.as_str())
         .with_network("none") // Use QEMU args for SSH networking instead
         .with_metadata("bootc:source-image", &opts.image)
         .with_metadata("bootc:memory-mb", &opts.memory.to_string())

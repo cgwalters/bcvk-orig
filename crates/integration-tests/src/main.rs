@@ -1,4 +1,4 @@
-use std::path::Path;
+use camino::Utf8Path;
 
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -66,7 +66,7 @@ pub(crate) fn get_bck_command() -> Result<String> {
     // Force the user to set this if we're running from the project dir
     if let Some(path) = ["target/debug/bcvk", "target/release/bcvk"]
         .into_iter()
-        .find(|p| Path::new(p).exists())
+        .find(|p| Utf8Path::new(p).exists())
     {
         return Err(eyre!(
             "Detected {path} - set BCVK_PATH={path} to run using this binary"

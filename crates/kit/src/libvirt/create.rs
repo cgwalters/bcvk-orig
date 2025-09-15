@@ -12,10 +12,10 @@ use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR, DEFAULT_MEMORY_USE
 use crate::ssh::generate_ssh_keypair;
 use crate::sshcred::smbios_cred_for_root_ssh;
 use base64::Engine;
+use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile;
 use tracing::{debug, info, warn};
@@ -555,18 +555,18 @@ impl LibvirtCreateOpts {
 
         if let Some(ref ssh_key_path) = self.ssh_key {
             // Use existing SSH key
-            let private_key_path = PathBuf::from(ssh_key_path);
+            let private_key_path = Utf8PathBuf::from(ssh_key_path);
             let public_key_path = format!("{}.pub", ssh_key_path);
 
             if !private_key_path.exists() {
                 return Err(eyre!("SSH private key not found: {}", ssh_key_path));
             }
 
-            if !Path::new(&public_key_path).exists() {
+            if !Utf8Path::new(&public_key_path).exists() {
                 return Err(eyre!("SSH public key not found: {}", public_key_path));
             }
 
-            let private_key_content = fs::read_to_string(&private_key_path)
+            let private_key_content = fs::read_to_string(private_key_path.as_std_path())
                 .map_err(|e| eyre!("Failed to read private key {}: {}", ssh_key_path, e))?;
 
             let public_key = fs::read_to_string(&public_key_path)
@@ -592,13 +592,16 @@ impl LibvirtCreateOpts {
                 .map_err(|e| eyre!("Failed to create temporary directory: {}", e))?;
 
             // Generate keypair
-            let keypair = generate_ssh_keypair(temp_dir.path(), "id_rsa")?;
+            let keypair = generate_ssh_keypair(
+                camino::Utf8Path::from_path(temp_dir.path()).unwrap(),
+                "id_rsa",
+            )?;
 
             // Read the key contents from the generated keypair
-            let private_key_content = fs::read_to_string(&keypair.private_key_path)
+            let private_key_content = fs::read_to_string(keypair.private_key_path.as_std_path())
                 .map_err(|e| eyre!("Failed to read generated private key: {}", e))?;
 
-            let public_key = fs::read_to_string(&keypair.public_key_path)
+            let public_key = fs::read_to_string(keypair.public_key_path.as_std_path())
                 .map_err(|e| eyre!("Failed to read generated public key: {}", e))?;
 
             info!("Generated ephemeral SSH keypair (will be stored in domain XML)");

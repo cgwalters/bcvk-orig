@@ -4,8 +4,8 @@
 //! operations, ensuring consistency across to-disk, libvirt-upload-disk,
 //! and other installation-related commands.
 
+use camino::Utf8PathBuf;
 use clap::Parser;
-use std::path::PathBuf;
 
 /// Common installation options for bootc disk operations
 ///
@@ -27,7 +27,7 @@ pub struct InstallOptions {
         long,
         help = "Path to host container storage (auto-detected if not specified)"
     )]
-    pub storage_path: Option<PathBuf>,
+    pub storage_path: Option<Utf8PathBuf>,
 }
 
 impl InstallOptions {

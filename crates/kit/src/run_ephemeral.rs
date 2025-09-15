@@ -92,7 +92,7 @@ use std::io::{BufWriter, Write};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -381,13 +381,10 @@ fn prepare_run_command_with_temp(
 
         debug!(
             "Adding container storage from {} as hoststorage mount",
-            storage_path.display()
+            storage_path
         );
-        host_mounts.push((
-            storage_path.display().to_string(),
-            "hoststorage".to_string(),
-            true,
-        )); // true = read-only
+        host_mounts.push((storage_path.to_string(), "hoststorage".to_string(), true));
+        // true = read-only
     }
 
     // Parse writable bind mounts
@@ -396,10 +393,9 @@ fn prepare_run_command_with_temp(
             (path.to_string(), name.to_string())
         } else {
             let path = mount_spec.clone();
-            let name = std::path::Path::new(&path)
+            let name = Utf8Path::new(&path)
                 .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("mount"))
-                .to_string_lossy()
+                .unwrap_or("mount")
                 .to_string();
             (path, name)
         };
@@ -412,10 +408,9 @@ fn prepare_run_command_with_temp(
             (path.to_string(), name.to_string())
         } else {
             let path = mount_spec.clone();
-            let name = std::path::Path::new(&path)
+            let name = Utf8Path::new(&path)
                 .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("mount"))
-                .to_string_lossy()
+                .unwrap_or("mount")
                 .to_string();
             (path, name)
         };
@@ -553,9 +548,8 @@ fn prepare_run_command_with_temp(
 pub(crate) fn process_disk_files(
     disk_specs: &[String],
     image: &str,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(Utf8PathBuf, String)>> {
     use std::fs::File;
-    use std::path::Path;
 
     let mut processed_disks = Vec::new();
 
@@ -583,7 +577,7 @@ pub(crate) fn process_disk_files(
             (disk_spec.clone(), "output".to_string())
         };
 
-        let disk_path = Path::new(&disk_file);
+        let disk_path = Utf8Path::new(&disk_file);
 
         // Security check: only accept regular files
         if disk_path.exists() {
@@ -614,12 +608,10 @@ pub(crate) fn process_disk_files(
 
         // Convert relative paths to absolute paths for QEMU
         let absolute_disk_file = if disk_path.is_absolute() {
-            disk_file
+            disk_file.into()
         } else {
-            std::fs::canonicalize(&disk_path)
-                .with_context(|| format!("Failed to canonicalize disk file path: {}", disk_file))?
-                .to_string_lossy()
-                .to_string()
+            let p = disk_path.canonicalize()?;
+            Utf8PathBuf::try_from(p)?
         };
 
         processed_disks.push((absolute_disk_file, disk_name));
@@ -673,7 +665,7 @@ fn inject_systemd_units() -> Result<()> {
     let source_wants = "/run/systemd-units/system/default.target.wants";
     let target_wants = &format!("{}/default.target.wants", target_units);
 
-    if std::path::Path::new(source_wants).exists() {
+    if Utf8Path::new(source_wants).exists() {
         for entry in fs::read_dir(source_wants)? {
             let entry = entry?;
             let path = entry.path();
@@ -714,7 +706,6 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
 pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     use crate::qemu;
     use std::fs;
-    use std::path::Path;
 
     debug!("Running QEMU implementation inside container");
 
@@ -724,7 +715,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     };
 
     // Find kernel and initramfs from the container image (not the host)
-    let modules_dir = Path::new("/run/source-image/usr/lib/modules");
+    let modules_dir = Utf8Path::new("/run/source-image/usr/lib/modules");
     let mut vmlinuz_path = None;
     let mut initramfs_path = None;
 
@@ -749,7 +740,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         .ok_or_else(|| eyre!("No initramfs found in /run/source-image/usr/lib/modules"))?;
 
     // Verify KVM access
-    if !Path::new("/dev/kvm").exists() || !fs::File::open("/dev/kvm").is_ok() {
+    if !Utf8Path::new("/dev/kvm").exists() || !fs::File::open("/dev/kvm").is_ok() {
         return Err(eyre!("KVM device not accessible"));
     }
 
@@ -794,16 +785,16 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
 
     debug!(
         "Checking for host mounts directory: /run/host-mounts exists = {}",
-        std::path::Path::new("/run/host-mounts").exists()
+        Utf8Path::new("/run/host-mounts").exists()
     );
     debug!(
         "Checking for systemd units directory: /run/systemd-units exists = {}",
-        std::path::Path::new("/run/systemd-units").exists()
+        Utf8Path::new("/run/systemd-units").exists()
     );
 
     let target_unitdir = "/run/source-image/etc/systemd/system";
 
-    if std::path::Path::new("/run/host-mounts").exists() {
+    if Utf8Path::new("/run/host-mounts").exists() {
         for entry in fs::read_dir("/run/host-mounts")? {
             let entry = entry?;
             let mount_name = entry.file_name();
@@ -1037,7 +1028,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
     // Only enable systemd notification debugging if the systemd version supports it
     if systemd_version.has_vmm_notify() {
-        let log_path = Path::new("/run/systemd-guest.txt");
+        let log_path = Utf8Path::new("/run/systemd-guest.txt");
         let logf = File::create(log_path).context("Creating log")?;
         qemu_config.systemd_notify = Some(logf);
         debug!(

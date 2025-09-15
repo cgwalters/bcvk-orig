@@ -6,7 +6,9 @@ TAR_REPRODUCIBLE = tar --mtime="@${SOURCE_DATE_EPOCH}" --sort=name --owner=0 --g
 
 all: bin manpages
 
+.PHONY: bin
 bin:
+	cargo check --workspace
 	cargo build --release
 
 # Generate man pages from markdown sources
@@ -27,6 +29,7 @@ $(TARGETMAN)/%.8: docs/src/man/%.md
 	@echo "Generated $@"
 
 # Sync CLI options before generating man pages
+.PHONY: manpages
 manpages: sync-cli-options $(MAN8_TARGETS)
 
 # Hidden target to sync CLI options once

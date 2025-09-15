@@ -1,6 +1,6 @@
+use camino::{Utf8Path, Utf8PathBuf};
 use std::io::{Seek as _, Write as _};
 use std::os::fd::OwnedFd;
-use std::path::{Path, PathBuf};
 
 use cap_std_ext::cap_std::io_lifetimes::AsFilelike as _;
 use color_eyre::eyre::{eyre, Context};
@@ -29,7 +29,7 @@ pub(crate) fn impl_sealed_memfd(description: &str, content: &[u8]) -> Result<Own
 }
 
 /// Detect the container storage path using podman system info
-pub(crate) fn detect_container_storage_path() -> Result<PathBuf> {
+pub(crate) fn detect_container_storage_path() -> Result<Utf8PathBuf> {
     use std::process::Command;
 
     let output = Command::new("podman")
@@ -54,20 +54,20 @@ pub(crate) fn detect_container_storage_path() -> Result<PathBuf> {
         .and_then(|root| root.as_str())
         .ok_or_else(|| eyre!("Could not find graphRoot in podman system info"))?;
 
-    let storage_path = PathBuf::from(graph_root);
+    let storage_path = Utf8PathBuf::from(graph_root);
 
     // Validate the path exists and is a directory
     if !storage_path.exists() {
         return Err(eyre!(
             "Storage path from podman does not exist: {}",
-            storage_path.display()
+            storage_path
         ));
     }
 
     if !storage_path.is_dir() {
         return Err(eyre!(
             "Storage path from podman is not a directory: {}",
-            storage_path.display()
+            storage_path
         ));
     }
 
@@ -75,19 +75,13 @@ pub(crate) fn detect_container_storage_path() -> Result<PathBuf> {
 }
 
 /// Validate that a container storage path exists and has the expected structure
-pub(crate) fn validate_container_storage_path(path: &Path) -> Result<()> {
+pub(crate) fn validate_container_storage_path(path: &Utf8Path) -> Result<()> {
     if !path.exists() {
-        return Err(eyre!(
-            "Container storage path does not exist: {}",
-            path.display()
-        ));
+        return Err(eyre!("Container storage path does not exist: {}", path));
     }
 
     if !path.is_dir() {
-        return Err(eyre!(
-            "Container storage path is not a directory: {}",
-            path.display()
-        ));
+        return Err(eyre!("Container storage path is not a directory: {}", path));
     }
 
     // Check for expected subdirectories that indicate this is a containers storage directory
@@ -97,7 +91,7 @@ pub(crate) fn validate_container_storage_path(path: &Path) -> Result<()> {
     if !overlay_path.exists() && !overlay_images_path.exists() {
         return Err(eyre!(
             "Path does not appear to be a valid container storage directory: {}. Missing overlay subdirectories.", 
-            path.display()
+            path
         ));
     }
 

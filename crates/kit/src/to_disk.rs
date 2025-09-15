@@ -81,7 +81,6 @@ use clap::Parser;
 use color_eyre::eyre::Context;
 use color_eyre::Result;
 use std::borrow::Cow;
-use std::path::PathBuf;
 use tracing::debug;
 
 /// Configuration options for installing a bootc container image to disk
@@ -125,10 +124,10 @@ impl ToDiskOpts {
     /// Resolve and validate the container storage path
     ///
     /// Uses explicit storage_path if specified, otherwise auto-detects container storage.
-    fn get_storage_path(&self) -> Result<PathBuf> {
+    fn get_storage_path(&self) -> Result<Utf8PathBuf> {
         if let Some(ref path) = self.install.storage_path {
             utils::validate_container_storage_path(path)?;
-            Ok(path.to_path_buf())
+            Ok(path.clone())
         } else {
             utils::detect_container_storage_path()
         }

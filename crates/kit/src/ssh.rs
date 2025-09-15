@@ -1,10 +1,9 @@
 //! SSH integration for bcvk VMs
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{eyre::eyre, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::debug;
 
@@ -15,9 +14,9 @@ use crate::CONTAINER_STATEDIR;
 pub struct SshKeyPair {
     /// Path to the private key file
     #[allow(dead_code)]
-    pub private_key_path: PathBuf,
+    pub private_key_path: Utf8PathBuf,
     /// Path to the public key file (typically private_key_path + ".pub")
-    pub public_key_path: PathBuf,
+    pub public_key_path: Utf8PathBuf,
 }
 
 /// Generate a new RSA SSH keypair in the specified directory
@@ -25,9 +24,9 @@ pub struct SshKeyPair {
 /// Creates a new 4096-bit RSA SSH keypair using the system's `ssh-keygen` command.
 /// The private key is created with secure permissions (0600) and no passphrase to
 /// enable automated use cases.
-pub fn generate_ssh_keypair(output_dir: &Path, key_name: &str) -> Result<SshKeyPair> {
+pub fn generate_ssh_keypair(output_dir: &Utf8Path, key_name: &str) -> Result<SshKeyPair> {
     // Create output directory if it doesn't exist
-    fs::create_dir_all(output_dir)?;
+    fs::create_dir_all(output_dir.as_std_path())?;
 
     let private_key_path = output_dir.join(key_name);
     let public_key_path = output_dir.join(format!("{}.pub", key_name));
@@ -42,9 +41,7 @@ pub fn generate_ssh_keypair(output_dir: &Path, key_name: &str) -> Result<SshKeyP
             "-b",
             "4096", // Use 4096-bit RSA for security
             "-f",
-            private_key_path
-                .to_str()
-                .ok_or_else(|| eyre!("Invalid key path"))?,
+            private_key_path.as_str(),
             "-N",
             "", // No passphrase
             "-C",
@@ -58,10 +55,10 @@ pub fn generate_ssh_keypair(output_dir: &Path, key_name: &str) -> Result<SshKeyP
     }
 
     // Set secure permissions on private key
-    let metadata = fs::metadata(&private_key_path)?;
+    let metadata = fs::metadata(private_key_path.as_std_path())?;
     let mut permissions = metadata.permissions();
     permissions.set_mode(0o600); // Read/write for owner only
-    fs::set_permissions(&private_key_path, permissions)?;
+    fs::set_permissions(private_key_path.as_std_path(), permissions)?;
 
     debug!("Generated SSH keypair successfully");
 
@@ -72,7 +69,7 @@ pub fn generate_ssh_keypair(output_dir: &Path, key_name: &str) -> Result<SshKeyP
 }
 
 pub fn generate_default_keypair() -> Result<SshKeyPair> {
-    generate_ssh_keypair(Path::new(CONTAINER_STATEDIR), "ssh")
+    generate_ssh_keypair(Utf8Path::new(CONTAINER_STATEDIR), "ssh")
 }
 
 /// Connect to VM via container-based SSH access
@@ -132,16 +129,14 @@ pub fn generate_default_keypair() -> Result<SshKeyPair> {
 /// # Example
 ///
 /// ```rust,no_run
-/// use std::path::Path;
 /// use bootc_kit::ssh::connect_via_container;
 ///
 /// // Interactive SSH session
-/// let key_path = Path::new("/tmp/unused"); // Key is mounted in container
-/// connect_via_container("bootc-vm-abc123", key_path, "root", vec![])?;
+/// connect_via_container("bootc-vm-abc123", vec![])?;
 ///
 /// // Run a specific command
 /// let args = vec!["systemctl".to_string(), "status".to_string()];
-/// connect_via_container("bootc-vm-abc123", key_path, "root", args)?;
+/// connect_via_container("bootc-vm-abc123", args)?;
 /// ```
 ///
 /// # Generated Command Structure
@@ -319,18 +314,20 @@ mod tests {
     #[test]
     fn test_generate_ssh_keypair() {
         let temp_dir = TempDir::new().unwrap();
-        let key_pair = generate_ssh_keypair(temp_dir.path(), "test_key").unwrap();
+        let key_pair =
+            generate_ssh_keypair(Utf8Path::from_path(temp_dir.path()).unwrap(), "test_key")
+                .unwrap();
 
         // Check that files exist
         assert!(key_pair.private_key_path.exists());
         assert!(key_pair.public_key_path.exists());
 
-        let content = std::fs::read_to_string(&key_pair.public_key_path).unwrap();
+        let content = std::fs::read_to_string(key_pair.public_key_path.as_std_path()).unwrap();
         // Check that public key starts with expected format
         assert!(content.starts_with("ssh-rsa"));
 
         // Check private key permissions
-        let metadata = std::fs::metadata(&key_pair.private_key_path).unwrap();
+        let metadata = std::fs::metadata(key_pair.private_key_path.as_std_path()).unwrap();
         let permissions = metadata.permissions();
         assert_eq!(permissions.mode() & 0o777, 0o600);
     }
