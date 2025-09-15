@@ -25,9 +25,9 @@ pub struct LibvirtRunOpts {
     #[clap(long, default_value = "2")]
     pub cpus: u32,
 
-    /// Disk size in GB for the VM
-    #[clap(long, default_value = "20")]
-    pub disk_size: u32,
+    /// Disk size for the VM (e.g. 20G, 10240M, or plain number for bytes)
+    #[clap(long, default_value = "20G")]
+    pub disk_size: String,
 
     /// Root filesystem type for installation
     #[clap(long, default_value = "ext4")]

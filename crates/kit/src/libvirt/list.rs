@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
+use comfy_table::{presets::UTF8_FULL, Table};
 use serde_json::{json, Value};
 use std::process::Command;
 use tracing::{debug, info, warn};
@@ -69,28 +70,6 @@ impl BootcVolume {
             "source_digest": self.source_digest,
             "created": self.created,
         })
-    }
-
-    /// Format as human-readable string
-    fn format_human(&self, detailed: bool) -> String {
-        let mut output = format!("{:<20} {:<15}", self.name, format_size(self.size));
-
-        if let Some(ref source_image) = self.source_image {
-            output.push_str(&format!(" {}", source_image));
-        } else {
-            output.push_str(" <no metadata>");
-        }
-
-        if detailed {
-            output.push_str(&format!("\n  Path: {}", self.path));
-            output.push_str(&format!("\n  Format: {}", self.format));
-
-            if let Some(ref created) = self.created {
-                output.push_str(&format!("\n  Created: {}", created));
-            }
-        }
-
-        output
     }
 }
 
@@ -288,17 +267,44 @@ impl LibvirtListOpts {
             return Ok(());
         }
 
-        // Header
-        println!("{:<20} {:<15} {}", "NAME", "SIZE", "SOURCE IMAGE");
-        println!("{}", "-".repeat(70));
+        // Create table using comfy_table
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
 
-        // Volume list
-        for volume in volumes {
-            println!("{}", volume.format_human(self.detailed));
-            if self.detailed && volume != volumes.last().unwrap() {
-                println!(); // Add blank line between detailed entries
+        if self.detailed {
+            table.set_header(vec![
+                "NAME",
+                "SIZE",
+                "FORMAT",
+                "PATH",
+                "SOURCE IMAGE",
+                "CREATED",
+            ]);
+
+            for volume in volumes {
+                let source_image = volume.source_image.as_deref().unwrap_or("<no metadata>");
+                let created = volume.created.as_deref().unwrap_or("N/A");
+
+                table.add_row(vec![
+                    &volume.name,
+                    &format_size(volume.size),
+                    &volume.format,
+                    &volume.path,
+                    source_image,
+                    created,
+                ]);
+            }
+        } else {
+            table.set_header(vec!["NAME", "SIZE", "SOURCE IMAGE"]);
+
+            for volume in volumes {
+                let source_image = volume.source_image.as_deref().unwrap_or("<no metadata>");
+
+                table.add_row(vec![&volume.name, &format_size(volume.size), source_image]);
             }
         }
+
+        println!("{}", table);
 
         // Summary
         println!(

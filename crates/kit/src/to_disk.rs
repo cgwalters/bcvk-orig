@@ -98,9 +98,9 @@ pub struct ToDiskOpts {
     #[clap(flatten)]
     pub install: InstallOptions,
 
-    /// Disk size to create (optional, defaults to calculated size based on source image)
+    /// Disk size to create (e.g. 10G, 5120M, or plain number for bytes)
     #[clap(long)]
-    pub disk_size: Option<u64>,
+    pub disk_size: Option<String>,
 
     /// Common VM configuration options
     #[clap(flatten)]
@@ -172,10 +172,11 @@ impl ToDiskOpts {
 
     /// Calculate the optimal target disk size based on the source image or explicit size
     ///
-    /// Returns explicit disk_size if provided, otherwise 2x the image size with a 4GB minimum.
+    /// Returns explicit disk_size if provided (parsed from human-readable format),
+    /// otherwise 2x the image size with a 4GB minimum.
     fn calculate_disk_size(&self) -> Result<u64> {
-        if let Some(size) = self.disk_size {
-            return Ok(size);
+        if let Some(ref size_str) = self.disk_size {
+            return utils::parse_size(size_str);
         }
 
         // Get the image size and multiply by 2 for installation space

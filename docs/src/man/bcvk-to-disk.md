@@ -49,7 +49,7 @@ The installation process:
 
 **--disk-size**=*DISK_SIZE*
 
-    Disk size to create (optional, defaults to calculated size based on source image)
+    Disk size to create (e.g. 10G, 5120M, or plain number for bytes)
 
 **--memory**=*MEMORY*
 

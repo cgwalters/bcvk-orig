@@ -56,9 +56,9 @@ pub struct RunOpts {
     #[clap(long, default_value = "2")]
     pub cpus: u32,
 
-    /// Disk size in GB for the VM
-    #[clap(long, default_value = "20")]
-    pub disk_size: u32,
+    /// Disk size for the VM (e.g. 20G, 10240M, or plain number for bytes)
+    #[clap(long, default_value = "20G")]
+    pub disk_size: String,
 
     /// Root filesystem type for installation
     #[clap(long, default_value = "ext4")]
@@ -364,7 +364,7 @@ pub fn run_vm_impl(opts: RunOpts) -> Result<()> {
     let to_disk_opts = ToDiskOpts {
         source_image: opts.image.clone(),
         target_disk: disk_path.clone(),
-        disk_size: Some((opts.disk_size as u64) * 1024 * 1024 * 1024), // Convert GB to bytes
+        disk_size: Some(opts.disk_size.clone()),
         install: InstallOptions {
             filesystem: Some(opts.filesystem.clone()),
             root_size: None,
