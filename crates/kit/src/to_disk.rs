@@ -165,6 +165,7 @@ impl ToDiskOpts {
         // TODO: make /var a tmpfs by default (actually make run-ephemeral more like a readonly bootc)
         vec![
             "mount -t tmpfs tmpfs /var/lib/containers".to_owned(),
+            "mount -t tmpfs tmpfs /var/tmp".to_owned(),
             bootc_install,
         ]
     }
@@ -178,8 +179,7 @@ impl ToDiskOpts {
         }
 
         // Get the image size and multiply by 2 for installation space
-        let image_size =
-            images::get_image_size(&self.source_image).unwrap_or(2 * 1024 * 1024 * 1024); // Default to 2GB if we can't get image size
+        let image_size = images::get_image_size(&self.source_image)?;
 
         // Minimum 4GB, otherwise 2x the image size
         let disk_size = std::cmp::max(image_size * 2, 4 * 1024 * 1024 * 1024);
