@@ -4,7 +4,8 @@
 //! for bootc containers, inspired by the podman-bootc domain builder pattern.
 
 use crate::arch::ArchConfig;
-use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_MB};
+use crate::common_opts::DEFAULT_MEMORY_USER_STR;
+use crate::run_ephemeral::default_vcpus;
 use color_eyre::{eyre::eyre, Result};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -104,7 +105,11 @@ impl DomainBuilder {
     /// Build the domain XML
     pub fn build_xml(self) -> Result<String> {
         let name = self.name.ok_or_else(|| eyre!("Domain name is required"))?;
-        let memory = self.memory.unwrap_or(DEFAULT_MEMORY_MB as u64);
+        let memory = self.memory.unwrap_or_else(|| {
+            crate::utils::parse_memory_to_mb(DEFAULT_MEMORY_USER_STR)
+                .unwrap()
+                .into()
+        });
         let vcpus = self.vcpus.unwrap_or_else(default_vcpus);
         let uuid = self.uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
 

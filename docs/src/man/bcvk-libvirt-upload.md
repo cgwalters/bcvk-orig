@@ -47,9 +47,9 @@ Upload bootc disk images to libvirt with metadata annotations
 
 **--memory**=*MEMORY*
 
-    Memory size for installation VM (e.g. 2G, 1024M)
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--vcpus**=*VCPUS*
 

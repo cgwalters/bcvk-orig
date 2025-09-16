@@ -16,8 +16,15 @@ for `podman`. It does require a virt stack (qemu, virtiofsd)
 in the host environment.
 
 ```bash
-bcvk run-ephemeral -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
+bcvk ephemeral run -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
 bcvk ssh mytestvm
+```
+
+Or to fully streamline the above and have the VM automatically terminate when you exit
+the SSH client:
+
+```
+bcvk ephemeral ssh quay.io/fedora/fedora-bootc:42
 ```
 
 ### Creating a persistent bootable disk image from a container image

@@ -33,7 +33,7 @@ Create and start domains from uploaded bootc volumes
 
     Memory size for the domain (e.g. 2G, 1024M)
 
-    Default: 2G
+    Default: 4G
 
 **--vcpus**=*VCPUS*
 
@@ -89,11 +89,11 @@ Create and start domains from uploaded bootc volumes
 
     Size of the disk image for automatic upload (e.g., '20G', '10240M')
 
-**--install-memory**=*INSTALL_MEMORY*
+**--memory**=*MEMORY*
 
-    Memory size for installation VM during auto-upload (e.g. 2G, 1024M)
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--install-vcpus**=*INSTALL_VCPUS*
 

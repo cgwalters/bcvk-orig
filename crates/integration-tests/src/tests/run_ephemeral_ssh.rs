@@ -1,4 +1,4 @@
-//! Integration tests for run-ephemeral-ssh command
+//! Integration tests for ephemeral run-ssh command
 //!
 //! ⚠️  **CRITICAL INTEGRATION TEST POLICY** ⚠️
 //!
@@ -24,14 +24,15 @@ use crate::{get_alternative_test_image, get_bck_command, get_test_image, INTEGRA
 pub fn test_run_ephemeral_ssh_command() {
     let bck = get_bck_command().unwrap();
 
-    eprintln!("Testing run-ephemeral-ssh with command execution...");
+    eprintln!("Testing ephemeral run-ssh with command execution...");
 
     // Run ephemeral SSH with a simple echo command
     let output = Command::new("timeout")
         .args([
             "60s",
             &bck,
-            "run-ephemeral-ssh",
+            "ephemeral",
+            "run-ssh",
             "--label",
             INTEGRATION_TEST_LABEL,
             &get_test_image(),
@@ -40,7 +41,7 @@ pub fn test_run_ephemeral_ssh_command() {
             "hello world from SSH",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral-ssh");
+        .expect("Failed to run bcvk ephemeral run-ssh");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -51,7 +52,7 @@ pub fn test_run_ephemeral_ssh_command() {
     // Check that the command completed successfully
     assert!(
         output.status.success(),
-        "run-ephemeral-ssh failed: {}",
+        "ephemeral run-ssh failed: {}",
         stderr
     );
 
@@ -69,7 +70,7 @@ pub fn test_run_ephemeral_ssh_command() {
 pub fn test_run_ephemeral_ssh_cleanup() {
     let bck = get_bck_command().unwrap();
 
-    eprintln!("Testing run-ephemeral-ssh cleanup behavior...");
+    eprintln!("Testing ephemeral run-ssh cleanup behavior...");
 
     // Generate a unique container name for this test
     let container_name = format!("test-ssh-cleanup-{}", std::process::id());
@@ -79,7 +80,8 @@ pub fn test_run_ephemeral_ssh_cleanup() {
         .args([
             "60s",
             &bck,
-            "run-ephemeral-ssh",
+            "ephemeral",
+            "run-ssh",
             "--name",
             &container_name,
             "--label",
@@ -90,11 +92,11 @@ pub fn test_run_ephemeral_ssh_cleanup() {
             "testing cleanup",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral-ssh");
+        .expect("Failed to run bcvk ephemeral run-ssh");
 
     assert!(
         output.status.success(),
-        "run-ephemeral-ssh failed: {}",
+        "ephemeral run-ssh failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -122,14 +124,15 @@ pub fn test_run_ephemeral_ssh_cleanup() {
 pub fn test_run_ephemeral_ssh_system_command() {
     let bck = get_bck_command().unwrap();
 
-    eprintln!("Testing run-ephemeral-ssh with system command...");
+    eprintln!("Testing ephemeral run-ssh with system command...");
 
     // Run ephemeral SSH with systemctl command
     let output = Command::new("timeout")
         .args([
             "60s",
             &bck,
-            "run-ephemeral-ssh",
+            "ephemeral",
+            "run-ssh",
             "--label",
             INTEGRATION_TEST_LABEL,
             &get_test_image(),
@@ -140,7 +143,7 @@ pub fn test_run_ephemeral_ssh_system_command() {
             "true", // Allow non-zero exit for degraded state
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral-ssh");
+        .expect("Failed to run bcvk ephemeral run-ssh");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -151,25 +154,26 @@ pub fn test_run_ephemeral_ssh_system_command() {
     // The command should complete (even if system is degraded)
     assert!(
         output.status.success(),
-        "run-ephemeral-ssh failed: {}",
+        "ephemeral run-ssh failed: {}",
         stderr
     );
 
     eprintln!("Successfully executed system command via SSH");
 }
 
-/// Test that run-ephemeral-ssh properly forwards exit codes
+/// Test that ephemeral run-ssh properly forwards exit codes
 pub fn test_run_ephemeral_ssh_exit_code() {
     let bck = get_bck_command().unwrap();
 
-    eprintln!("Testing run-ephemeral-ssh exit code forwarding...");
+    eprintln!("Testing ephemeral run-ssh exit code forwarding...");
 
     // Run a command that exits with non-zero code
     let output = Command::new("timeout")
         .args([
             "60s",
             &bck,
-            "run-ephemeral-ssh",
+            "ephemeral",
+            "run-ssh",
             "--label",
             INTEGRATION_TEST_LABEL,
             &get_test_image(),
@@ -178,7 +182,7 @@ pub fn test_run_ephemeral_ssh_exit_code() {
             "42",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral-ssh");
+        .expect("Failed to run bcvk ephemeral run-ssh");
 
     // Check that the exit code was properly forwarded
     let exit_code = output.status.code().expect("Failed to get exit code");
@@ -215,7 +219,8 @@ fn test_ssh_with_image(bck: &str, image: &str, image_type: &str) {
         .args([
             "90s", // Longer timeout for potentially slower images
             bck,
-            "run-ephemeral-ssh",
+            "ephemeral",
+            "run-ssh",
             "--label",
             INTEGRATION_TEST_LABEL,
             image,
@@ -224,7 +229,7 @@ fn test_ssh_with_image(bck: &str, image: &str, image_type: &str) {
             "--version",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral-ssh");
+        .expect("Failed to run bcvk ephemeral run-ssh");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

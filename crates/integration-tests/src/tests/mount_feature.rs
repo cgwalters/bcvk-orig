@@ -103,7 +103,8 @@ pub fn test_mount_feature_bind() {
         .args([
             "60s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -159,7 +160,8 @@ pub fn test_mount_feature_ro_bind() {
         .args([
             "60s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,

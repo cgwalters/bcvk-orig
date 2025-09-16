@@ -220,20 +220,20 @@ fn main() {
             tests::libvirt_verb::test_libvirt_list_json_output();
             Ok(())
         }),
-        Trial::test("libvirt_create_resource_options", || {
-            tests::libvirt_verb::test_libvirt_create_resource_options();
+        Trial::test("libvirt_run_resource_options", || {
+            tests::libvirt_verb::test_libvirt_run_resource_options();
             Ok(())
         }),
-        Trial::test("libvirt_create_networking", || {
-            tests::libvirt_verb::test_libvirt_create_networking();
+        Trial::test("libvirt_run_networking", || {
+            tests::libvirt_verb::test_libvirt_run_networking();
             Ok(())
         }),
         Trial::test("libvirt_ssh_integration", || {
             tests::libvirt_verb::test_libvirt_ssh_integration();
             Ok(())
         }),
-        Trial::test("libvirt_create_ssh_full_workflow", || {
-            tests::libvirt_verb::test_libvirt_create_ssh_full_workflow();
+        Trial::test("libvirt_run_ssh_full_workflow", || {
+            tests::libvirt_verb::test_libvirt_run_ssh_full_workflow();
             Ok(())
         }),
         Trial::test("libvirt_vm_lifecycle", || {

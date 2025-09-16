@@ -1,24 +1,14 @@
 # NAME
 
-bcvk-run-ephemeral - Run bootc containers as temporary VMs for testing and development
+bcvk-ephemeral-run-ssh - Run ephemeral VM and SSH into it
 
 # SYNOPSIS
 
-**bcvk run-ephemeral** \[**-h**\|**\--help**\] \[*OPTIONS*\] *IMAGE*
+**bcvk ephemeral run-ssh** [*OPTIONS*]
 
 # DESCRIPTION
 
-Creates ephemeral VMs that boot directly from container images without
-installation. Perfect for testing bootc images, running temporary
-workloads, or development workflows. VMs are automatically cleaned
-up when stopped.
-
-The ephemeral VM approach allows you to:
-
-- Test bootc container images quickly without permanent installation
-- Iterate on container builds with fast feedback loops  
-- Run isolated workloads that don't persist beyond the VM session
-- Debug container behavior in a realistic boot environment
+Run ephemeral VM and SSH into it
 
 # OPTIONS
 
@@ -29,11 +19,15 @@ The ephemeral VM approach allows you to:
 
     This argument is required.
 
+**SSH_ARGS**
+
+    SSH command to execute (optional, defaults to interactive shell)
+
 **--memory**=*MEMORY*
 
-    Memory size (e.g. 2G, 1024M, 512m, or plain number for MB)
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--vcpus**=*VCPUS*
 
@@ -111,28 +105,24 @@ The ephemeral VM approach allows you to:
 
     Mount host container storage (RO) at /run/virtiofs-mnt-hoststorage
 
+**--add-swap**=*ADD_SWAP*
+
+    Allocate a swap device of the provided size
+
 **--mount-disk-file**=*FILE[:NAME]*
 
     Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>
 
 <!-- END GENERATED OPTIONS -->
 
-# ARGUMENTS
-
-*IMAGE*
-
-:   Container image reference to run (e.g., \`registry.example.com/my-bootc:latest\`)
-
 # EXAMPLES
 
-Run a bootc image in an ephemeral VM:
+TODO: Add practical examples showing how to use this command.
 
-    bcvk run-ephemeral quay.io/example/my-bootc:latest
+# SEE ALSO
 
-Run with custom memory and connect to console:
-
-    bcvk run-ephemeral --memory 4G --console registry.example.com/bootc:dev
+**bcvk**(8)
 
 # VERSION
 
-v0.1.0
+<!-- VERSION PLACEHOLDER -->

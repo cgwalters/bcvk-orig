@@ -1,4 +1,4 @@
-//! Integration tests for run-ephemeral command
+//! Integration tests for ephemeral run command
 //!
 //! ⚠️  **CRITICAL INTEGRATION TEST POLICY** ⚠️
 //!
@@ -59,7 +59,8 @@ pub fn test_run_ephemeral_correct_kernel() {
         .args([
             "120s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -68,7 +69,7 @@ pub fn test_run_ephemeral_correct_kernel() {
             "systemd.unit=poweroff.target",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral");
+        .expect("Failed to run bcvk ephemeral run");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -77,7 +78,7 @@ pub fn test_run_ephemeral_correct_kernel() {
     eprintln!("stderr: {}", stderr);
 
     // Check that the command completed successfully
-    assert!(output.status.success(), "run-ephemeral failed: {}", stderr);
+    assert!(output.status.success(), "ephemeral run failed: {}", stderr);
 
     // The test passing means we successfully booted with the container's kernel
     // (since we fixed the code to look in /run/source-image/usr/lib/modules)
@@ -97,7 +98,8 @@ pub fn test_run_ephemeral_poweroff() {
         .args([
             "120s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -106,12 +108,12 @@ pub fn test_run_ephemeral_poweroff() {
             "systemd.unit=poweroff.target",
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral");
+        .expect("Failed to run bcvk ephemeral run");
 
     // Check that the command completed successfully
     assert!(
         output.status.success(),
-        "run-ephemeral failed: {}",
+        "ephemeral run failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -124,7 +126,8 @@ pub fn test_run_ephemeral_with_memory_limit() {
         .args([
             "120s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -135,11 +138,11 @@ pub fn test_run_ephemeral_with_memory_limit() {
             &get_test_image(),
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral");
+        .expect("Failed to run bcvk ephemeral run");
 
     assert!(
         output.status.success(),
-        "run-ephemeral with memory limit failed: {}",
+        "ephemeral run with memory limit failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -152,7 +155,8 @@ pub fn test_run_ephemeral_with_vcpus() {
         .args([
             "120s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -163,11 +167,11 @@ pub fn test_run_ephemeral_with_vcpus() {
             &get_test_image(),
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral");
+        .expect("Failed to run bcvk ephemeral run");
 
     assert!(
         output.status.success(),
-        "run-ephemeral with vcpus failed: {}",
+        "ephemeral run with vcpus failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -183,7 +187,8 @@ pub fn test_run_ephemeral_execute() {
         .args([
             "120s",
             &bck,
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--rm",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -192,7 +197,7 @@ pub fn test_run_ephemeral_execute() {
             &get_test_image(),
         ])
         .output()
-        .expect("Failed to run bcvk run-ephemeral with --execute");
+        .expect("Failed to run bcvk ephemeral run with --execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -203,7 +208,7 @@ pub fn test_run_ephemeral_execute() {
     // Check that the command completed successfully
     assert!(
         output.status.success(),
-        "run-ephemeral with --execute failed: {}",
+        "ephemeral run with --execute failed: {}",
         stderr
     );
 
@@ -253,7 +258,8 @@ pub fn test_run_ephemeral_container_ssh_access() {
     // Start VM with SSH in detached mode
     let output = Command::new(&bck)
         .args([
-            "run-ephemeral",
+            "ephemeral",
+            "run",
             "--ssh-keygen",
             "--label",
             INTEGRATION_TEST_LABEL,
@@ -283,6 +289,7 @@ pub fn test_run_ephemeral_container_ssh_access() {
         .args([
             "120s", // Give plenty of time for VM boot and SSH to become ready
             &bck,
+            "ephemeral",
             "ssh",
             &container_name,
             "echo",

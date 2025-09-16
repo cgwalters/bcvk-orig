@@ -245,19 +245,6 @@ impl QemuConfig {
             return Err(eyre!("vCPU count too high: {} (maximum 256)", self.vcpus));
         }
 
-        // Validate virtio block devices
-        for blk_device in &self.virtio_blk_devices {
-            if !std::path::Path::new(&blk_device.disk_file).exists() {
-                return Err(eyre!(
-                    "Virtio block device file does not exist: {}",
-                    blk_device.disk_file
-                ));
-            }
-            if blk_device.serial.is_empty() {
-                return Err(eyre!("Virtio block device serial cannot be empty"));
-            }
-        }
-
         // Validate virtiofs mounts
         for mount in &self.additional_mounts {
             if mount.tag.is_empty() {

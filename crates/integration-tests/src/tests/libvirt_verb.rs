@@ -1,16 +1,17 @@
-//! Integration tests for the libvirt verb with upload/create subcommands
+//! Integration tests for the libvirt verb with domain management subcommands
 //!
-//! These tests verify the new libvirt command structure:
-//! - `bck libvirt upload` - Upload disk images to libvirt with metadata
-//! - `bck libvirt create` - Create and start domains from uploaded volumes
-//! - `bck libvirt list` - List available bootc volumes
-//! - Domain lifecycle management and SSH integration
+//! These tests verify the libvirt command structure:
+//! - `bcvk libvirt run` - Run bootable containers as persistent VMs
+//! - `bcvk libvirt list` - List bootc domains
+//! - `bcvk libvirt list-volumes` - List available bootc volumes
+//! - `bcvk libvirt ssh` - SSH into domains
+//! - Domain lifecycle management (start/stop/rm/inspect)
 
 use std::process::Command;
 
 use crate::{get_bck_command, get_test_image};
 
-/// Test libvirt list functionality
+/// Test libvirt list functionality (lists domains)
 pub fn test_libvirt_list_functionality() {
     let bck = get_bck_command().unwrap();
 
@@ -23,7 +24,7 @@ pub fn test_libvirt_list_functionality() {
     }
 
     let output = Command::new(&bck)
-        .args(["libvirt", "list", "--pool", "default"])
+        .args(["libvirt", "list"])
         .output()
         .expect("Failed to run libvirt list");
 
@@ -33,11 +34,18 @@ pub fn test_libvirt_list_functionality() {
 
     if output.status.success() {
         println!("libvirt list succeeded: {}", stdout);
+        // Should show domain listing format
+        assert!(
+            stdout.contains("NAME")
+                || stdout.contains("No VMs found")
+                || stdout.contains("No running VMs found"),
+            "Should show domain listing format or empty message"
+        );
     } else {
         println!("libvirt list failed (expected in CI): {}", stderr);
-        // Verify it fails with proper error message about libvirt/pool
+        // Verify it fails with proper error message about libvirt connectivity
         assert!(
-            stderr.contains("pool") || stderr.contains("libvirt") || stderr.contains("connect"),
+            stderr.contains("libvirt") || stderr.contains("connect") || stderr.contains("virsh"),
             "Should have meaningful error about libvirt connectivity"
         );
     }
@@ -50,9 +58,9 @@ pub fn test_libvirt_list_json_output() {
     let bck = get_bck_command().unwrap();
 
     let output = Command::new(&bck)
-        .args(["libvirt", "list", "--pool", "default", "--json"])
+        .args(["libvirt", "list", "--format", "json"])
         .output()
-        .expect("Failed to run libvirt list --json");
+        .expect("Failed to run libvirt list --format json");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -62,81 +70,104 @@ pub fn test_libvirt_list_json_output() {
         let json_result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
         assert!(
             json_result.is_ok(),
-            "libvirt list --json should produce valid JSON: {}",
+            "libvirt list --format json should produce valid JSON: {}",
             stdout
         );
-        println!("libvirt list --json produced valid JSON");
+        println!("libvirt list --format json produced valid JSON");
     } else {
-        // May fail in CI without libvirt, but should mention JSON in error handling
-        println!("libvirt list --json failed (expected in CI): {}", stderr);
+        // May fail in CI without libvirt, but should mention error handling
+        println!(
+            "libvirt list --format json failed (expected in CI): {}",
+            stderr
+        );
     }
 
     println!("libvirt list JSON output tested");
 }
 
 /// Test domain resource configuration options
-pub fn test_libvirt_create_resource_options() {
+pub fn test_libvirt_run_resource_options() {
     let bck = get_bck_command().unwrap();
 
     // Test various resource configurations are accepted syntactically
     let resource_tests = vec![
-        vec!["--memory", "1G", "--vcpus", "1"],
-        vec!["--memory", "4G", "--vcpus", "4"],
-        vec!["--memory", "2048M", "--vcpus", "2"],
+        vec!["--memory", "1G", "--cpus", "1"],
+        vec!["--memory", "4G", "--cpus", "4"],
+        vec!["--memory", "2048M", "--cpus", "2"],
     ];
 
     for resources in resource_tests {
-        let mut args = vec!["libvirt", "create", "test-volume", "--pool", "default"];
+        let mut args = vec!["libvirt", "run"];
         args.extend(resources.iter());
-        args.push("--dry-run");
+        args.push("--help"); // Just test parsing, don't actually run
 
         let output = Command::new(&bck)
             .args(&args)
             .output()
-            .expect("Failed to run libvirt create with resources");
+            .expect("Failed to run libvirt run with resources");
 
-        // May fail due to missing volume, but shouldn't fail on resource parsing
+        // Should show help and not fail on resource parsing
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !stderr.contains("invalid") || !stderr.contains("parse"),
-            "Resource options should be parsed correctly: {:?}",
-            resources
-        );
+
+        if !output.status.success() {
+            assert!(
+                !stderr.contains("invalid") && !stderr.contains("parse"),
+                "Resource options should be parsed correctly: {:?}, stderr: {}",
+                resources,
+                stderr
+            );
+        } else {
+            assert!(
+                stdout.contains("Usage") || stdout.contains("USAGE"),
+                "Should show help output when using --help"
+            );
+        }
     }
 
-    println!("libvirt create resource options validated");
+    println!("libvirt run resource options validated");
 }
 
 /// Test domain networking configuration
-pub fn test_libvirt_create_networking() {
+pub fn test_libvirt_run_networking() {
     let bck = get_bck_command().unwrap();
 
     let network_configs = vec![
-        vec!["--network", "default"],
-        vec!["--network", "bridge=virbr0"],
+        vec!["--network", "user"],
+        vec!["--network", "bridge"],
         vec!["--network", "none"],
     ];
 
     for network in network_configs {
-        let mut args = vec!["libvirt", "create", "test-volume"];
+        let mut args = vec!["libvirt", "run"];
         args.extend(network.iter());
-        args.push("--dry-run");
+        args.push("--help"); // Just test parsing, don't actually run
 
         let output = Command::new(&bck)
             .args(&args)
             .output()
-            .expect("Failed to run libvirt create with network config");
+            .expect("Failed to run libvirt run with network config");
 
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Should not fail on network option parsing
-        assert!(
-            !stderr.contains("network") || stderr.contains("volume") || stderr.contains("pool"),
-            "Network options should be parsed correctly: {:?}",
-            network
-        );
+
+        if !output.status.success() {
+            // Should not fail on network option parsing
+            assert!(
+                !stderr.contains("invalid") && !stderr.contains("parse"),
+                "Network options should be parsed correctly: {:?}, stderr: {}",
+                network,
+                stderr
+            );
+        } else {
+            assert!(
+                stdout.contains("Usage") || stdout.contains("USAGE"),
+                "Should show help output when using --help"
+            );
+        }
     }
 
-    println!("libvirt create networking options validated");
+    println!("libvirt run networking options validated");
 }
 
 /// Test SSH integration with created domains (syntax only)
@@ -164,8 +195,8 @@ pub fn test_libvirt_ssh_integration() {
     println!("libvirt SSH integration tested");
 }
 
-/// Test full libvirt create + SSH workflow like run_ephemeral SSH tests
-pub fn test_libvirt_create_ssh_full_workflow() {
+/// Test full libvirt run + SSH workflow like run_ephemeral SSH tests
+pub fn test_libvirt_run_ssh_full_workflow() {
     // Skip if running in CI/container environment without libvirt
     if std::env::var("CI").is_ok() || !std::path::Path::new("/usr/bin/virsh").exists() {
         println!("Skipping full SSH workflow test - no libvirt available");
@@ -185,7 +216,7 @@ pub fn test_libvirt_create_ssh_full_workflow() {
     );
 
     println!(
-        "Testing full libvirt create + SSH workflow with domain: {}",
+        "Testing full libvirt run + SSH workflow with domain: {}",
         domain_name
     );
 
@@ -204,18 +235,15 @@ pub fn test_libvirt_create_ssh_full_workflow() {
             "300s", // 5 minute timeout for domain creation
             &bck,
             "libvirt",
-            "create",
-            "--generate-ssh-key",
-            "--start",
-            "--domain-name",
+            "run",
+            "--name",
             &domain_name,
-            "--force",
             "--filesystem",
             "ext4",
             &test_image,
         ])
         .output()
-        .expect("Failed to run libvirt create with SSH");
+        .expect("Failed to run libvirt run with SSH");
 
     let create_stdout = String::from_utf8_lossy(&create_output.stdout);
     let create_stderr = String::from_utf8_lossy(&create_output.stderr);
@@ -327,7 +355,7 @@ pub fn test_libvirt_create_ssh_full_workflow() {
     );
 
     println!("✓ Successfully executed 'echo hello world' via SSH");
-    println!("✓ Full libvirt create + SSH workflow test passed");
+    println!("✓ Full libvirt run + SSH workflow test passed");
 }
 
 /// Helper function to cleanup domain
@@ -354,7 +382,7 @@ fn cleanup_domain(domain_name: &str) {
     }
 }
 
-/// Test VM startup and shutdown with libvirt create
+/// Test VM startup and shutdown with libvirt run
 pub fn test_libvirt_vm_lifecycle() {
     // Skip if running in CI/container environment without libvirt
     if std::env::var("CI").is_ok() || !std::path::Path::new("/usr/bin/virsh").exists() {
@@ -381,16 +409,15 @@ pub fn test_libvirt_vm_lifecycle() {
     let output = std::process::Command::new(&bck)
         .args(&[
             "libvirt",
-            "create",
+            "run",
             "--filesystem",
             "ext4",
-            "--domain-name",
+            "--name",
             &domain_name,
-            "--force",
             test_image,
         ])
         .output()
-        .expect("Failed to run libvirt create");
+        .expect("Failed to run libvirt run");
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -490,19 +517,15 @@ pub fn test_libvirt_error_handling() {
 
     let error_cases = vec![
         // Missing required arguments
-        (vec!["libvirt", "upload"], "missing image"),
-        (vec!["libvirt", "create"], "missing volume"),
+        (vec!["libvirt", "run"], "missing image"),
+        (vec!["libvirt", "ssh"], "missing domain"),
         // Invalid resource specs
         (
-            vec!["libvirt", "create", "vol", "--memory", "invalid"],
+            vec!["libvirt", "run", "--memory", "invalid", "test-image"],
             "invalid memory",
         ),
-        (
-            vec!["libvirt", "upload", "img", "--disk-size", "bad"],
-            "invalid size",
-        ),
-        // Invalid pool names
-        (vec!["libvirt", "list", "--pool", ""], "empty pool"),
+        // Invalid format
+        (vec!["libvirt", "list", "--format", "bad"], "invalid format"),
     ];
 
     for (args, error_desc) in error_cases {

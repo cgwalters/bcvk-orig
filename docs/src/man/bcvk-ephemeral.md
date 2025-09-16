@@ -1,14 +1,14 @@
 # NAME
 
-bcvk-pb - Podman-bootc drop-in replacement commands
+bcvk-ephemeral - Manage ephemeral VMs for bootc containers
 
 # SYNOPSIS
 
-**bcvk pb** [*OPTIONS*]
+**bcvk ephemeral** [*OPTIONS*]
 
 # DESCRIPTION
 
-Podman-bootc drop-in replacement commands
+Manage ephemeral VMs for bootc containers
 
 <!-- BEGIN GENERATED OPTIONS -->
 <!-- END GENERATED OPTIONS -->
@@ -23,4 +23,4 @@ TODO: Add practical examples showing how to use this command.
 
 # VERSION
 
-v0.1.0
+<!-- VERSION PLACEHOLDER -->

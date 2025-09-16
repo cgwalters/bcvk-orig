@@ -25,9 +25,9 @@ Run a bootable container as a persistent VM
 
 **--memory**=*MEMORY*
 
-    Memory size in MB for the VM
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--cpus**=*CPUS*
 

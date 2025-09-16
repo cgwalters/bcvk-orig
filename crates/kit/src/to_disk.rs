@@ -237,12 +237,9 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
     // Resolve container storage path (auto-detect or validate specified path)
     let storage_path = opts.get_storage_path()?;
 
-    // Always output container storage path for test visibility
-    eprintln!("Using container storage at: {:?}", storage_path);
-
     // Debug logging for installation configuration
     if opts.common.debug {
-        debug!("Using container storage at: {:?}", storage_path);
+        debug!("Using container storage: {:?}", storage_path);
         debug!("Installing to target disk: {:?}", opts.target_disk);
         debug!("Filesystem: {:?}", opts.install.filesystem);
         if let Some(ref root_size) = opts.install.root_size {
@@ -309,6 +306,10 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             label: opts.label,
             ..Default::default()
         },
+        // Workaround for https://github.com/containers/container-libs/issues/144#issuecomment-3300424410
+        // Basically containers-libs allocates a tempfile for a whole serialization of a layer as a tarball
+        // when fetching, so we need enough memory to do so.
+        add_swap: Some(format!("{disk_size}")),
         bind_mounts: Vec::new(),        // No additional bind mounts needed
         ro_bind_mounts: Vec::new(),     // No additional ro bind mounts needed
         systemd_units_dir: None,        // No custom systemd units

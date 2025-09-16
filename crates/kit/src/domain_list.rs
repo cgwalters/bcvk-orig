@@ -1,6 +1,6 @@
-//! Domain listing utilities for podman-bootc VMs
+//! Domain listing utilities for bootc VMs
 //!
-//! This module provides functionality to list libvirt domains created by bcvk pb,
+//! This module provides functionality to list libvirt domains created by bcvk libvirt,
 //! using libvirt as the source of truth instead of the VmRegistry cache.
 
 use color_eyre::{eyre::Context, Result};
@@ -155,7 +155,7 @@ impl DomainLister {
         // Look for bootc metadata in the XML
         // This could be in various forms:
         // 1. <bootc:source-image> in metadata section
-        // 2. Domain name pattern (created by bcvk pb)
+        // 2. Domain name pattern (created by bcvk libvirt)
         // 3. Domain description containing bcvk signature
 
         // Try to extract source image from bootc metadata
@@ -187,9 +187,9 @@ impl DomainLister {
         })
     }
 
-    /// Check if a domain was created by bcvk pb
+    /// Check if a domain was created by bcvk libvirt
     fn is_podman_bootc_domain(&self, _domain_name: &str, xml: &str) -> bool {
-        // Only use XML metadata - domains created by bcvk pb should have bootc metadata
+        // Only use XML metadata - domains created by bcvk libvirt should have bootc metadata
         xml.contains("bootc:source-image") || xml.contains("bootc:container")
     }
 

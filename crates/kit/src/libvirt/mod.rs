@@ -1,9 +1,11 @@
 //! libvirt integration for bcvk
 //!
 //! This module provides a comprehensive libvirt integration with subcommands for:
+//! - `run`: Run a bootable container as a persistent VM
+//! - `list`: List bootc domains with metadata
 //! - `upload`: Upload bootc disk images to libvirt with metadata annotations
 //! - `create`: Create and start domains from uploaded volumes
-//! - `list`: List available bootc volumes with metadata
+//! - `list-volumes`: List available bootc volumes with metadata
 
 use clap::Subcommand;
 use color_eyre::Result;
@@ -12,6 +14,7 @@ pub mod create;
 pub mod domain;
 pub mod inspect;
 pub mod list;
+pub mod list_volumes;
 pub mod rm;
 pub mod run;
 pub mod ssh;
@@ -28,8 +31,12 @@ pub enum LibvirtCommands {
     /// SSH to libvirt domain with embedded SSH key
     Ssh(ssh::LibvirtSshOpts),
 
-    /// List available bootc domains with metadata
+    /// List bootc domains with metadata
     List(list::LibvirtListOpts),
+
+    /// List available bootc volumes with metadata
+    #[clap(name = "list-volumes")]
+    ListVolumes(list_volumes::LibvirtListVolumesOpts),
 
     /// Stop a running libvirt domain
     Stop(stop::LibvirtStopOpts),
@@ -57,6 +64,7 @@ impl LibvirtCommands {
             LibvirtCommands::Run(opts) => run::run(opts),
             LibvirtCommands::Ssh(opts) => ssh::run(opts),
             LibvirtCommands::List(opts) => list::run(opts),
+            LibvirtCommands::ListVolumes(opts) => list_volumes::run(opts),
             LibvirtCommands::Stop(opts) => stop::run(opts),
             LibvirtCommands::Start(opts) => start::run(opts),
             LibvirtCommands::Remove(opts) => rm::run(opts),

@@ -88,10 +88,11 @@
 //! - Ensures perfect fidelity of user options across process boundaries
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, Write};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+use bootc_utils::CommandRunExt;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use color_eyre::eyre::{eyre, Context};
@@ -100,15 +101,6 @@ use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tracing::debug;
-
-/// Default memory size in MB
-pub const DEFAULT_MEMORY_MB: u32 = 2048;
-
-/// Default memory size as string for clap defaults (in MB)
-pub const DEFAULT_MEMORY_STR: &str = "2048";
-
-/// Default memory size as string for user-facing defaults (in GB)
-pub const DEFAULT_MEMORY_USER_STR: &str = "2G";
 
 const ENTRYPOINT: &str = "/var/lib/bcvk/entrypoint";
 
@@ -119,7 +111,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
-use crate::{podman, systemd, utils, CONTAINER_STATEDIR};
+use crate::{common_opts::MemoryOpts, podman, systemd, utils, CONTAINER_STATEDIR};
 
 /// Common container lifecycle options for podman commands.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
@@ -157,12 +149,8 @@ pub struct CommonPodmanOptions {
 /// Common VM configuration options for hardware, networking, and features.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonVmOpts {
-    #[clap(
-        long,
-        default_value = DEFAULT_MEMORY_STR,
-        help = "Memory size (e.g. 2G, 1024M, 512m, or plain number for MB)"
-    )]
-    pub memory: Option<String>,
+    #[clap(flatten)]
+    pub memory: MemoryOpts,
 
     #[clap(long, help = "Number of vCPUs")]
     pub vcpus: Option<u32>,
@@ -209,11 +197,7 @@ pub struct CommonVmOpts {
 impl CommonVmOpts {
     /// Parse memory specification to MB
     pub fn memory_mb(&self) -> color_eyre::Result<u32> {
-        if let Some(ref mem_str) = self.memory {
-            crate::utils::parse_memory_to_mb(mem_str)
-        } else {
-            Ok(DEFAULT_MEMORY_MB)
-        }
+        crate::utils::parse_memory_to_mb(&self.memory.memory)
     }
 
     /// Get vCPU count
@@ -271,6 +255,9 @@ pub struct RunEphemeralOpts {
     )]
     pub bind_storage_ro: bool,
 
+    #[clap(long, help = "Allocate a swap device of the provided size")]
+    pub add_swap: Option<String>,
+
     #[clap(
         long = "mount-disk-file",
         value_name = "FILE[:NAME]",
@@ -315,27 +302,10 @@ pub fn run_synchronous(opts: RunEphemeralOpts) -> Result<()> {
     // Keep temp_dir alive until command completes
 
     // Use the same approach as run_detached but wait for completion instead of detaching
-    let output = cmd.output().context("Failed to execute podman command")?;
-
-    // Forward the output to our stdout/stderr so it appears in logs and tests
-    if !output.stdout.is_empty() {
-        std::io::Write::write_all(&mut std::io::stdout(), &output.stdout)?;
-        std::io::Write::flush(&mut std::io::stdout())?;
+    let status = cmd.status().context("Failed to execute podman command")?;
+    if !status.success() {
+        return Err(color_eyre::eyre::eyre!("ephemeral run failed {status:?}",));
     }
-    if !output.stderr.is_empty() {
-        std::io::Write::write_all(&mut std::io::stderr(), &output.stderr)?;
-        std::io::Write::flush(&mut std::io::stderr())?;
-    }
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!(
-            "Podman command failed with exit code {:?}: {}",
-            output.status.code(),
-            stderr
-        ));
-    }
-
     // Explicitly drop temp_dir after successful completion
     drop(temp_dir);
     Ok(())
@@ -462,6 +432,9 @@ fn prepare_run_command_with_temp(
         // This is a general hardening thing to do when running privileged
         "-v",
         "/sys:/sys:ro",
+        // Ensure we can create large files on the host and not in the overlay
+        "-v",
+        "/var/tmp:/var/tmp",
         "--device=/dev/kvm",
         "--device=/dev/vhost-vsock",
         "-v",
@@ -729,6 +702,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         let v = std::env::var("SYSTEMD_VERSION")?;
         systemd::SystemdVersion::from_version_output(&v)?
     };
+    debug!("Systemd version: {systemd_version}");
 
     // Find kernel and initramfs from the container image (not the host)
     let modules_dir = Utf8Path::new("/run/source-image/usr/lib/modules");
@@ -905,12 +879,12 @@ WantedBy=local-fs.target
     // Handle --execute: pipes will be created when adding to qemu_config later
     // No need to create files anymore as we're using pipes
 
+    let default_wantsdir = format!("{target_unitdir}/default.target.wants");
+    fs::create_dir_all(&default_wantsdir)?;
+
     match opts.common.execute.as_slice() {
         [] => {}
         elts => {
-            let wantsdir = format!("{target_unitdir}/default.target.wants");
-            fs::create_dir_all(&wantsdir)?;
-
             let mut service_content = format!(
                 r#"[Unit]
 Description=Execute Script Service
@@ -947,7 +921,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             fs::write(service_path, service_finish)?;
 
             for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
-                let wants_link = format!("{wantsdir}/{svc}");
+                let wants_link = format!("{default_wantsdir}/{svc}");
                 debug!("Creating execute service symlink: {}", &wants_link);
                 std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
             }
@@ -994,6 +968,48 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     }
 
     kernel_cmdline.extend(opts.common.kernel_args.clone());
+
+    // TODO allocate unlinked unnamed file and pass via fd
+    let mut tmp_swapfile = None;
+    if let Some(size) = opts.add_swap {
+        let size = utils::parse_size(&size)?;
+        debug!("Allocating swap: {size}");
+        let mut tmpf = tempfile::NamedTempFile::new_in("/var/tmp")?;
+        tmpf.as_file_mut()
+            .set_len(size)
+            .context("Allocating swap tempfile")?;
+        tmpf.seek(std::io::SeekFrom::Start(0))?;
+        let path: &Utf8Path = tmpf.path().try_into().unwrap();
+
+        Command::new("mkswap")
+            .args(["-q", path.as_str()])
+            .run()
+            .map_err(|e| eyre!("{e}"))?;
+
+        qemu_config.add_virtio_blk_device_with_format(
+            path.to_owned().into(),
+            "swap".into(),
+            crate::to_disk::Format::Raw,
+        );
+        let svc = format!(
+            r#"[Unit]
+Description=bcvk ephemeral swap
+
+[Swap]
+What=/dev/disk/by-id/virtio-swap
+Options=
+"#
+        );
+
+        let service_name = r#"dev-disk-by\x2did-virtio\x2dswap.swap"#;
+        let service_path = format!("{target_unitdir}/{service_name}");
+        fs::write(&service_path, svc)?;
+
+        let wants_link = format!("{default_wantsdir}/{service_name}");
+        std::os::unix::fs::symlink(format!("../{service_name}"), wants_link)?;
+
+        tmp_swapfile = Some(tmpf);
+    }
 
     // Parse disk files from environment variable
     let mut virtio_blk_devices = Vec::new();
@@ -1118,6 +1134,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
         }
     }
+
+    drop(tmp_swapfile);
 
     debug!("QEMU completed successfully");
 

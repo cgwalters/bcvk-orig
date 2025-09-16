@@ -1,10 +1,10 @@
 # NAME
 
-bcvk-ssh - Connect to running VMs via SSH
+bcvk-ephemeral-ssh - Connect to running VMs via SSH
 
 # SYNOPSIS
 
-**bcvk ssh** [*OPTIONS*]
+**bcvk ephemeral ssh** [*OPTIONS*]
 
 # DESCRIPTION
 
@@ -31,7 +31,7 @@ TODO: Add practical examples showing how to use this command.
 
 # SEE ALSO
 
-**bcvk**(8)
+**bcvk**(8), **bcvk-ephemeral**(8)
 
 # VERSION
 

@@ -63,9 +63,9 @@ The installation process:
 
 **--memory**=*MEMORY*
 
-    Memory size (e.g. 2G, 1024M, 512m, or plain number for MB)
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--vcpus**=*VCPUS*
 

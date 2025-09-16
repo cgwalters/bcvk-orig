@@ -4,11 +4,12 @@
 //! bootc volumes in storage pools, with automatic resource configuration and
 //! metadata-driven setup.
 
+use crate::common_opts::{MemoryOpts, DEFAULT_MEMORY_USER_STR};
 use crate::images;
 use crate::install_options::InstallOptions;
 use crate::libvirt::domain::DomainBuilder;
 use crate::libvirt::upload::LibvirtUploadOpts;
-use crate::run_ephemeral::{default_vcpus, DEFAULT_MEMORY_STR, DEFAULT_MEMORY_USER_STR};
+use crate::run_ephemeral::default_vcpus;
 use crate::ssh::generate_ssh_keypair;
 use crate::sshcred::smbios_cred_for_root_ssh;
 use base64::Engine;
@@ -84,8 +85,8 @@ pub struct LibvirtCreateOpts {
     pub disk_size: Option<String>,
 
     /// Memory size for installation VM during auto-upload (e.g. 2G, 1024M)
-    #[clap(long, default_value = DEFAULT_MEMORY_STR)]
-    pub install_memory: String,
+    #[clap(flatten)]
+    pub install_memory: MemoryOpts,
 
     /// Number of vCPUs for installation VM during auto-upload
     #[clap(long)]
@@ -169,7 +170,9 @@ impl LibvirtCreateOpts {
             pool: self.pool.clone(),
             disk_size: None,
             install: self.install.clone(),
-            memory: DEFAULT_MEMORY_STR.to_string(),
+            memory: MemoryOpts {
+                memory: DEFAULT_MEMORY_USER_STR.to_string(),
+            },
             vcpus: Some(default_vcpus()),
             karg: vec![],
             connect: self.connect.clone(),

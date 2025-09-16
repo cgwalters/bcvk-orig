@@ -23,12 +23,50 @@ pub struct LibvirtStopOpts {
 
 /// Execute the libvirt stop command
 pub fn run(opts: LibvirtStopOpts) -> Result<()> {
-    // Convert LibvirtStopOpts to podman_bootc::StopOpts and delegate
-    let pb_opts = crate::podman_bootc::StopOpts {
-        name: opts.name,
-        force: opts.force,
-        timeout: opts.timeout,
-    };
+    stop_vm_impl(opts)
+}
 
-    crate::podman_bootc::stop_vm(pb_opts)
+/// Stop a running VM (implementation)
+pub fn stop_vm_impl(opts: LibvirtStopOpts) -> Result<()> {
+    use crate::domain_list::DomainLister;
+    use color_eyre::eyre::Context;
+    use std::process::Command;
+
+    let lister = DomainLister::new();
+
+    // Check if domain exists and get its state
+    let state = lister
+        .get_domain_state(&opts.name)
+        .map_err(|_| color_eyre::eyre::eyre!("VM '{}' not found", opts.name))?;
+
+    if state != "running" {
+        println!("VM '{}' is already stopped (state: {})", opts.name, state);
+        return Ok(());
+    }
+
+    println!("🛑 Stopping VM '{}'...", opts.name);
+
+    // Use virsh to stop the domain
+    let mut cmd = Command::new("virsh");
+    if opts.force {
+        cmd.args(&["destroy", &opts.name]);
+    } else {
+        cmd.args(&["shutdown", &opts.name]);
+    }
+
+    let output = cmd
+        .output()
+        .with_context(|| "Failed to run virsh command")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to stop VM '{}': {}",
+            opts.name,
+            stderr
+        ));
+    }
+
+    println!("VM '{}' stopped successfully", opts.name);
+    Ok(())
 }

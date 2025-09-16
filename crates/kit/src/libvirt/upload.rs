@@ -3,8 +3,8 @@
 //! This module provides functionality to upload disk images created by to-disk
 //! to libvirt storage pools, maintaining container image metadata as libvirt annotations.
 
+use crate::common_opts::MemoryOpts;
 use crate::install_options::InstallOptions;
-use crate::run_ephemeral::DEFAULT_MEMORY_STR;
 use crate::to_disk::{run as to_disk, ToDiskOpts};
 use crate::{images, utils};
 use camino::Utf8PathBuf;
@@ -36,9 +36,8 @@ pub struct LibvirtUploadOpts {
     #[clap(flatten)]
     pub install: InstallOptions,
 
-    /// Memory size for installation VM (e.g. 2G, 1024M)
-    #[clap(long, default_value = DEFAULT_MEMORY_STR)]
-    pub memory: String,
+    #[clap(flatten)]
+    pub memory: MemoryOpts,
 
     /// Number of vCPUs for installation VM
     #[clap(long)]
@@ -225,7 +224,7 @@ pub fn run(opts: LibvirtUploadOpts) -> Result<()> {
         disk_size: Some(disk_size.to_string()),
         label: Default::default(),
         common: crate::run_ephemeral::CommonVmOpts {
-            memory: Some(opts.memory.clone()),
+            memory: opts.memory.clone(),
             vcpus: opts.vcpus,
             kernel_args: opts.karg.clone(),
             net: Some("none".to_string()),

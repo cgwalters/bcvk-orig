@@ -29,6 +29,7 @@ BWRAP_ARGS=(
     --bind /run/tmproot /
     --proc /proc
     --dev-bind /dev /dev
+    --bind /var/tmp /var/tmp
     --tmpfs /run
     --tmpfs /tmp
     --bind /run/inner-shared /run/inner-shared

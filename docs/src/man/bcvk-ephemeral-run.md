@@ -1,14 +1,14 @@
 # NAME
 
-bcvk-run-ephemeral-ssh - Run ephemeral VM and immediately SSH into it with lifecycle binding
+bcvk-ephemeral-run - Run bootc containers as ephemeral VMs
 
 # SYNOPSIS
 
-**bcvk run-ephemeral-ssh** [*OPTIONS*]
+**bcvk ephemeral run** [*OPTIONS*]
 
 # DESCRIPTION
 
-Run ephemeral VM and immediately SSH into it with lifecycle binding
+Run bootc containers as ephemeral VMs
 
 # OPTIONS
 
@@ -19,15 +19,11 @@ Run ephemeral VM and immediately SSH into it with lifecycle binding
 
     This argument is required.
 
-**SSH_ARGS**
-
-    SSH command to execute (optional, defaults to interactive shell)
-
 **--memory**=*MEMORY*
 
-    Memory size (e.g. 2G, 1024M, 512m, or plain number for MB)
+    Memory size (e.g. 4G, 2048M, or plain number for MB)
 
-    Default: 2048
+    Default: 4G
 
 **--vcpus**=*VCPUS*
 
@@ -105,6 +101,10 @@ Run ephemeral VM and immediately SSH into it with lifecycle binding
 
     Mount host container storage (RO) at /run/virtiofs-mnt-hoststorage
 
+**--add-swap**=*ADD_SWAP*
+
+    Allocate a swap device of the provided size
+
 **--mount-disk-file**=*FILE[:NAME]*
 
     Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>
@@ -121,4 +121,4 @@ TODO: Add practical examples showing how to use this command.
 
 # VERSION
 
-v0.1.0
+<!-- VERSION PLACEHOLDER -->

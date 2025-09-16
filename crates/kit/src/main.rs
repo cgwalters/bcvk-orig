@@ -6,9 +6,12 @@ use color_eyre::{Report, Result};
 
 mod arch;
 mod cli_json;
+mod common_opts;
 mod container_entrypoint;
 pub(crate) mod containerenv;
+mod domain_list;
 mod envdetect;
+mod ephemeral;
 mod hostexec;
 mod images;
 mod install_options;
@@ -16,7 +19,6 @@ mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
-mod podman_bootc;
 #[allow(dead_code)]
 mod qemu;
 mod run_ephemeral;
@@ -86,26 +88,6 @@ enum InternalsCmds {
     DumpCliJson,
 }
 
-/// SSH connection options for accessing running VMs.
-///
-/// Provides secure shell access to VMs running within containers,
-/// with automatic key management and connection routing.
-#[derive(Parser)]
-struct SshOpts {
-    /// Name or ID of the container running the target VM
-    ///
-    /// This should match the container name from podman or the VM ID
-    /// used when starting the ephemeral VM.
-    container_name: String,
-
-    /// Additional SSH client arguments to pass through
-    ///
-    /// Standard ssh arguments like -v for verbose output, -L for
-    /// port forwarding, or -o for SSH options.
-    #[clap(allow_hyphen_values = true, help = "SSH arguments like -v, -L, -o")]
-    args: Vec<String>,
-}
-
 /// Available bcvk commands for container and VM management.
 #[derive(Subcommand)]
 enum Commands {
@@ -117,13 +99,9 @@ enum Commands {
     #[clap(subcommand)]
     Images(images::ImagesOpts),
 
-    /// Run bootc containers as temporary VMs
-    #[clap(name = "run-ephemeral")]
-    RunEphemeral(run_ephemeral::RunEphemeralOpts),
-
-    /// Run ephemeral VM and SSH into it
-    #[clap(name = "run-ephemeral-ssh")]
-    RunEphemeralSsh(run_ephemeral_ssh::RunEphemeralSshOpts),
+    /// Manage ephemeral VMs for bootc containers
+    #[clap(subcommand)]
+    Ephemeral(ephemeral::EphemeralCommands),
 
     /// Install bootc images to persistent disk images
     #[clap(name = "to-disk")]
@@ -136,13 +114,6 @@ enum Commands {
     /// Upload bootc disk images to libvirt (deprecated)
     #[clap(name = "libvirt-upload-disk", hide = true)]
     LibvirtUploadDisk(libvirt_upload_disk::LibvirtUploadDiskOpts),
-
-    /// Connect to running VMs via SSH
-    Ssh(SshOpts),
-
-    /// Podman-bootc drop-in replacement commands
-    #[clap(name = "pb")]
-    PodmanBootc(podman_bootc::PodmanBootcOpts),
 
     /// Internal container entrypoint command (hidden from help)
     #[clap(hide = true)]
@@ -196,12 +167,7 @@ fn main() -> Result<(), Report> {
             hostexec::run(opts.bin, opts.args)?;
         }
         Commands::Images(opts) => opts.run()?,
-        Commands::RunEphemeral(opts) => {
-            run_ephemeral::run(opts)?;
-        }
-        Commands::RunEphemeralSsh(opts) => {
-            run_ephemeral_ssh::run_ephemeral_ssh(opts)?;
-        }
+        Commands::Ephemeral(cmd) => cmd.run()?,
         Commands::ToDisk(opts) => {
             to_disk::run(opts)?;
         }
@@ -213,26 +179,6 @@ fn main() -> Result<(), Report> {
                 "Warning: 'libvirt-upload-disk' is deprecated. Use 'libvirt upload' instead."
             );
             libvirt_upload_disk::run(opts)?;
-        }
-        Commands::Ssh(opts) => {
-            // Wait for systemd to signal readiness or fall back to SSH polling
-            let has_systemd_notify = run_ephemeral_ssh::wait_for_systemd_ready(
-                &opts.container_name,
-                std::time::Duration::from_secs(60),
-            )?;
-
-            if !has_systemd_notify {
-                // Fall back to SSH polling for older systemd versions
-                run_ephemeral_ssh::wait_for_ssh_ready(
-                    &opts.container_name,
-                    std::time::Duration::from_secs(60),
-                )?;
-            }
-
-            ssh::connect_via_container(&opts.container_name, opts.args)?;
-        }
-        Commands::PodmanBootc(opts) => {
-            opts.run()?;
         }
         Commands::ContainerEntrypoint(opts) => {
             // Create a tokio runtime for async container entrypoint operations
