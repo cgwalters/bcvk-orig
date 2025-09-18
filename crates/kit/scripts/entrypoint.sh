@@ -48,4 +48,18 @@ fi
 export SYSTEMD_VERSION=$(systemctl --version)
 
 # Execute with proper environment passing
-exec bwrap --as-pid-1 --unshare-pid "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@"
+# Set up signal handlers that will cleanly exit on INT or TERM
+trap 'kill -TERM $BWRAP_PID 2>/dev/null; exit 0' INT TERM
+
+# Run bwrap in background so we can handle signals; xref
+# https://github.com/containers/bubblewrap/pull/586
+# But probably really we should switch to systemd
+bwrap --as-pid-1 --unshare-pid "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@" &
+BWRAP_PID=$!
+
+# Wait for bwrap to complete
+wait $BWRAP_PID
+EXIT_CODE=$?
+
+# Exit with the same code as bwrap
+exit $EXIT_CODE

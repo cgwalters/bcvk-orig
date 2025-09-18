@@ -79,11 +79,19 @@ pub fn ssh_to_vm(opts: SshOpts) -> Result<()> {
 }
 
 pub async fn run(opts: ContainerEntrypointOpts) -> Result<()> {
-    let mut term = tokio::signal::unix::signal(SignalKind::from_raw(libc::SIGRTMIN() + 3))?;
+    let signals = [libc::SIGTERM, libc::SIGINT, libc::SIGRTMIN() + 3];
+    let mut signal_joinset = tokio::task::JoinSet::new();
+    for s in signals {
+        signal_joinset.spawn(async move {
+            let mut signal = tokio::signal::unix::signal(SignalKind::from_raw(s))?;
+            signal.recv().await;
+            Ok::<_, std::io::Error>(())
+        });
+    }
 
     tokio::select! {
-        _ = term.recv() => {
-            debug!("Caught SIGRTMIN+3");
+        _ = signal_joinset.join_next() => {
+            debug!("Caught termination signal");
             std::process::exit(0)
         }
         r = async {
