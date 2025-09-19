@@ -1,4 +1,5 @@
 use cap_std_ext::{cap_std, cap_std::fs::Dir, dirext::CapStdExtDirExt};
+use color_eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -9,6 +10,8 @@ use std::path::Path;
 pub struct SupervisorStatus {
     /// Current state of the supervisor/VM
     pub state: Option<SupervisorState>,
+    /// True if qemu is running
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,7 +40,7 @@ impl SupervisorStatus {
     pub fn new(state: SupervisorState) -> Self {
         Self {
             state: Some(state),
-            ..Default::default()
+            running: true,
         }
     }
 
@@ -79,5 +82,12 @@ impl StatusWriter {
 
     pub fn update_state(&self, state: SupervisorState) -> color_eyre::Result<()> {
         self.update(SupervisorStatus::new(state))
+    }
+
+    pub fn finish(self) -> Result<()> {
+        self.update(SupervisorStatus {
+            running: false,
+            ..Default::default()
+        })
     }
 }

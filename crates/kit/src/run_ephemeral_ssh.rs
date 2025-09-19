@@ -1,6 +1,7 @@
 use color_eyre::eyre::{eyre, Context as _};
 use color_eyre::Result;
 use indicatif::ProgressBar;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,18 +37,25 @@ pub fn wait_for_vm_ready(
     );
 
     // Use the new monitor-status subcommand for efficient inotify-based monitoring
-    let mut cmd = Command::new("podman")
-        .args([
-            "exec",
-            container_name,
-            "/var/lib/bcvk/entrypoint",
-            "monitor-status",
-        ])
+    let mut cmd = Command::new("podman");
+    cmd.args([
+        "exec",
+        container_name,
+        "/var/lib/bcvk/entrypoint",
+        "monitor-status",
+    ]);
+    unsafe {
+        cmd.pre_exec(|| {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+                .map_err(Into::into)
+        });
+    }
+    let mut child = cmd
         .stdout(Stdio::piped())
         .spawn()
         .context("Failed to start status monitor")?;
 
-    let stdout = cmd.stdout.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
     let reader = std::io::BufReader::new(stdout);
 
     // Read JSON lines from the monitor
@@ -64,7 +72,7 @@ pub fn wait_for_vm_ready(
                     progress.set_message("Ready");
 
                     // End the monitor
-                    let _ = cmd.kill();
+                    let _ = child.kill();
                     return Ok((true, progress));
                 }
                 SupervisorState::ReachedTarget(ref target) => {
@@ -82,7 +90,7 @@ pub fn wait_for_vm_ready(
         }
     }
 
-    let status = cmd.wait()?;
+    let status = child.wait()?;
     Err(eyre!("Monitor process exited unexpectedly: {status:?}"))
 }
 

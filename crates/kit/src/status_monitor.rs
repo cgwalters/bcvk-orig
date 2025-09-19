@@ -1,8 +1,8 @@
 use color_eyre::Result;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::io::Write;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::supervisor_status::SupervisorStatus;
@@ -10,7 +10,6 @@ use crate::supervisor_status::SupervisorStatus;
 /// Monitor a status file for changes using inotify
 pub fn monitor_status_file<P: AsRef<Path>>(
     path: P,
-    timeout: Duration,
 ) -> Result<impl Iterator<Item = Result<SupervisorStatus>>> {
     let path = path.as_ref();
     let parent_dir = path.parent().unwrap_or(Path::new("/"));
@@ -33,7 +32,6 @@ pub fn monitor_status_file<P: AsRef<Path>>(
         path: path.to_path_buf(),
         receiver: rx,
         _watcher: watcher,
-        timeout,
         last_mtime: None,
     })
 }
@@ -42,7 +40,6 @@ struct StatusFileIterator {
     path: std::path::PathBuf,
     receiver: Receiver<notify::Result<notify::Event>>,
     _watcher: RecommendedWatcher,
-    timeout: Duration,
     last_mtime: Option<std::time::SystemTime>,
 }
 
@@ -57,7 +54,7 @@ impl Iterator for StatusFileIterator {
             }
 
             // Wait for file system events with timeout
-            let event = self.receiver.recv_timeout(self.timeout).ok()?.ok()?;
+            let event = self.receiver.recv().ok()?.ok()?;
             // Check if this event is for our target file
             if self.is_relevant_event(&event) {
                 if let Some(status) = self.try_read_status_if_changed() {
@@ -108,19 +105,24 @@ impl StatusFileIterator {
 /// Monitor status and stream updates to stdout as JSON lines
 pub fn monitor_and_stream_status() -> Result<()> {
     let path = "/run/supervisor-status.json";
-    let timeout = Duration::from_secs(60); // Default timeout
 
-    let monitor = monitor_status_file(path, timeout)?;
+    let monitor = monitor_status_file(path)?;
 
     for status_result in monitor {
         match status_result {
             Ok(status) => {
-                // Output as JSON line - just stream every update
-                if let Ok(json) = serde_json::to_string(&status) {
-                    println!("{}", json);
-                    // Flush stdout to ensure immediate delivery
-                    use std::io::Write;
-                    std::io::stdout().flush().unwrap_or(());
+                // Output as JSON line - just stream every update. We don't panic
+                // or error on failure to write, just silently exit as we assume
+                // the caller intentionally dropped.
+                let mut stdout = std::io::stdout().lock();
+                if let Err(_) = serde_json::to_writer(&mut stdout, &status) {
+                    return Ok(());
+                }
+                let _ = stdout.write(b"\n");
+                let _ = stdout.flush()?;
+                // Terminate stream when qemu exits
+                if !status.running {
+                    return Ok(());
                 }
             }
             Err(e) => {
