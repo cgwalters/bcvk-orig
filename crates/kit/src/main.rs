@@ -2,7 +2,7 @@ use std::ffi::OsString;
 
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
-use color_eyre::{Report, Result};
+use color_eyre::{eyre::Context as _, Report, Result};
 
 mod arch;
 mod boot_progress;
@@ -164,6 +164,10 @@ fn main() -> Result<(), Report> {
     color_eyre::install()?;
 
     let cli = Cli::parse();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Init tokio runtime")?;
 
     match cli.command {
         Commands::Hostexec(opts) => {
@@ -185,7 +189,6 @@ fn main() -> Result<(), Report> {
         }
         Commands::ContainerEntrypoint(opts) => {
             // Create a tokio runtime for async container entrypoint operations
-            let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(container_entrypoint::run(opts))?;
         }
         Commands::DebugInternals(opts) => match opts.command {
@@ -208,5 +211,6 @@ fn main() -> Result<(), Report> {
             }
         },
     }
-    Ok(())
+    tracing::debug!("exiting");
+    std::process::exit(0)
 }

@@ -1090,7 +1090,7 @@ Options=
     let status_writer_clone = StatusWriter::new("/run/supervisor-status.json");
 
     // Only enable systemd notification debugging if the systemd version supports it
-    let monitor = if systemd_version
+    if systemd_version
         .map(|v| v.has_vmm_notify())
         .unwrap_or_default()
     {
@@ -1098,16 +1098,18 @@ Options=
         qemu_config.systemd_notify = Some(File::from(pipew));
         debug!("Enabling systemd notification debugging");
 
-        let monitor = tokio::task::spawn(boot_progress::monitor_boot_progress(
+        // Run this in the background
+        let _ = tokio::task::spawn(boot_progress::monitor_boot_progress(
             File::from(piper),
             status_writer_clone,
         ));
-        Some(monitor)
     } else {
         debug!("systemd version does not support vmm.notify_socket",);
         // For older systemd versions, write an unknown state
-        let _ = status_writer.update(SupervisorStatus { state: None });
-        None
+        status_writer.update(SupervisorStatus {
+            state: None,
+            running: true,
+        })?;
     };
 
     debug!("Starting QEMU with systemd debugging enabled");
@@ -1158,12 +1160,8 @@ Options=
 
     drop(tmp_swapfile);
 
-    // Cancel the systemd monitor task if it exists
-    if let Some(monitor) = monitor {
-        monitor.abort();
-    }
-
     debug!("QEMU completed successfully");
+    status_writer.finish()?;
 
     Ok(())
 }

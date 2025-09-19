@@ -102,7 +102,7 @@ pub async fn run(opts: ContainerEntrypointOpts) -> Result<()> {
     tokio::select! {
         _ = signal_joinset.join_next() => {
             debug!("Caught termination signal");
-            std::process::exit(0)
+            Ok(())
         }
         r = async {
             match opts.command {
