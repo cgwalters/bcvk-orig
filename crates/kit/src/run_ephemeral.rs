@@ -111,6 +111,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
+use crate::qemu;
 use crate::{
     boot_progress,
     common_opts::MemoryOpts,
@@ -424,6 +425,10 @@ fn prepare_run_command_with_temp(
         cmd.arg("-d");
     }
 
+    let vhost_dev = Utf8Path::new(qemu::VHOST_VSOCK)
+        .try_exists()?
+        .then(|| format!("--device={}", qemu::VHOST_VSOCK));
+
     cmd.args([
         // Needed to create nested containers (mountns, etc). Note when running
         // with userns (podman unpriv default) this is totally safe. TODO:
@@ -442,7 +447,9 @@ fn prepare_run_command_with_temp(
         "-v",
         "/var/tmp:/var/tmp",
         "--device=/dev/kvm",
-        "--device=/dev/vhost-vsock",
+    ]);
+    cmd.args(vhost_dev);
+    cmd.args([
         "-v",
         "/usr:/run/hostusr:ro", // Bind mount host /usr as read-only
         "-v",
@@ -961,6 +968,10 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         main_virtiofsd_config.socket_path.clone(),
     );
 
+    // Check for BCVK_DEBUG=disable-vsock to force disabling vsock for testing
+    let vsock_force_disabled = std::env::var("BCVK_DEBUG").as_deref() == Ok("disable-vsock");
+    let vsock_enabled = !vsock_force_disabled && qemu_config.enable_vsock().is_ok();
+
     // Handle SSH key generation and credential injection
     if opts.common.ssh_keygen {
         let key_pair = crate::ssh::generate_default_keypair()?;
@@ -1090,10 +1101,11 @@ Options=
     let status_writer_clone = StatusWriter::new("/run/supervisor-status.json");
 
     // Only enable systemd notification debugging if the systemd version supports it
-    if systemd_version
+    // and the host has vsock enabled
+    let systemd_has_vmm_notify = systemd_version
         .map(|v| v.has_vmm_notify())
-        .unwrap_or_default()
-    {
+        .unwrap_or_default();
+    if vsock_enabled && systemd_has_vmm_notify {
         let (piper, pipew) = rustix::pipe::pipe()?;
         qemu_config.systemd_notify = Some(File::from(pipew));
         debug!("Enabling systemd notification debugging");

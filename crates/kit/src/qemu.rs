@@ -3,7 +3,7 @@
 //! Supports direct kernel boot and disk image boot with VirtIO devices,
 //! automatic process cleanup, and SMBIOS credential injection.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::process::CommandExt as _;
@@ -18,6 +18,9 @@ use libc::{VMADDR_CID_ANY, VMADDR_PORT_ANY};
 use nix::sys::socket::{accept, bind, getsockname, socket, AddressFamily, SockFlag, SockType};
 use tracing::{debug, trace, warn};
 use vsock::VsockAddr;
+
+/// The device for vsock allocation
+pub const VHOST_VSOCK: &str = "/dev/vhost-vsock";
 
 /// VirtIO-FS mount point configuration.
 #[derive(Debug, Clone)]
@@ -153,11 +156,11 @@ pub struct QemuConfig {
     pub uefi_vars_path: Option<String>,
     /// SMBIOS credentials for systemd
     smbios_credentials: Vec<String>,
-    /// VSOCK is enabled by default
-    pub disable_vsock: bool,
 
     /// Write systemd notifications to this file
     pub systemd_notify: Option<File>,
+
+    vhost_fd: Option<File>,
 }
 
 impl QemuConfig {
@@ -193,6 +196,17 @@ impl QemuConfig {
             }),
             ..Default::default()
         }
+    }
+
+    // Enable vsock
+    pub fn enable_vsock(&mut self) -> Result<()> {
+        let fd = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(VHOST_VSOCK)
+            .with_context(|| format!("Failed to open {VHOST_VSOCK} for CID allocation"))?;
+        self.vhost_fd = Some(fd);
+        Ok(())
     }
 
     /// Set kernel command line arguments (only for direct boot)
@@ -359,15 +373,8 @@ impl QemuConfig {
 }
 
 /// Allocate a unique VSOCK CID
-fn allocate_vsock_cid() -> Result<(OwnedFd, u32)> {
-    use std::fs::OpenOptions;
+fn allocate_vsock_cid(vhost_fd: File) -> Result<(OwnedFd, u32)> {
     use std::os::unix::io::AsRawFd;
-
-    let vhost_fd = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/vhost-vsock")
-        .context("Failed to open /dev/vhost-vsock for CID allocation")?;
 
     for candidate_cid in 3..10001u32 {
         // Test if this CID is available
@@ -704,12 +711,12 @@ pub struct RunningQemu {
 }
 
 impl RunningQemu {
-    /// Spawn QEMU with optional AF_VSOCK debugging enabled
+    /// Spawn QEMU
     pub async fn spawn(mut config: QemuConfig) -> Result<Self> {
-        let vsockdata = if !config.disable_vsock {
+        let vsockdata = if let Some(vhost_fd) = config.vhost_fd.take() {
             // Get a unique guest CID using dynamic allocation
             // If /dev/vhost-vsock is not available, fall back to disabled vsock
-            match allocate_vsock_cid() {
+            match allocate_vsock_cid(vhost_fd) {
                 Ok(data) => Some(data),
                 Err(e) => {
                     debug!("Failed to allocate vsock CID, disabling vsock: {}", e);
@@ -721,6 +728,7 @@ impl RunningQemu {
         };
 
         let sd_notification = if let Some(target) = config.systemd_notify.take() {
+            color_eyre::eyre::ensure!(vsockdata.is_some());
             let vsock = socket(
                 AddressFamily::Vsock,
                 SockType::Stream,
