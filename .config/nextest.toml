@@ -1,0 +1,31 @@
+# cargo-nextest configuration for bcvk
+# https://nexte.st/book/configuration
+# 
+# Integration tests use libtest-mimic which is fully compatible with nextest
+
+[store]
+# Max test runtime data to collect
+# This helps with analyzing test performance
+dir = "target/nextest"
+
+[profile.default]
+# Standard settings for unit tests
+test-threads = "num-cpus"
+retries = { count = 2, backoff = "exponential", delay = "1s", max-delay = "10s" }
+slow-timeout = { period = "30s", terminate-after = 2 }
+fail-fast = false
+failure-output = "immediate"
+success-output = "never"
+status-level = "pass"
+
+# Profile for integration tests - run with limited parallelism due to QEMU/KVM resources
+[profile.integration]
+test-threads = 2
+retries = { count = 2, backoff = "exponential", delay = "1s", max-delay = "10s" }
+slow-timeout = { period = "500s", terminate-after = 60 }
+fail-fast = false
+failure-output = "immediate"
+success-output = "never"
+status-level = "pass"
+# Only run integration tests with this profile
+default-filter = "package(integration-tests)"

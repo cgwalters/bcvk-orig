@@ -9,46 +9,6 @@ use xshell::{cmd, Shell};
 /// Label used to identify containers created by integration tests
 pub(crate) const INTEGRATION_TEST_LABEL: &str = "bcvk.integration-test=1";
 
-/// Cleanup all containers with the integration test label
-pub(crate) fn cleanup_integration_test_containers() {
-    println!("Cleaning up integration test containers...");
-
-    // List all containers with our integration test label
-    let list_output = std::process::Command::new("podman")
-        .args([
-            "ps",
-            "-a",
-            "--filter",
-            "label=bcvk.integration-test=1",
-            "-q",
-        ])
-        .output();
-
-    if let Ok(output) = list_output {
-        if output.status.success() {
-            let container_ids = String::from_utf8_lossy(&output.stdout);
-            let containers: Vec<&str> = container_ids.lines().filter(|l| !l.is_empty()).collect();
-
-            if !containers.is_empty() {
-                println!(
-                    "Found {} integration test container(s) to clean up",
-                    containers.len()
-                );
-
-                // Force remove each container
-                for container_id in containers {
-                    let _ = std::process::Command::new("podman")
-                        .args(["rm", "-f", container_id])
-                        .output();
-                }
-                println!("Cleanup completed");
-            } else {
-                println!("No integration test containers found to clean up");
-            }
-        }
-    }
-}
-
 mod tests {
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;
@@ -246,12 +206,6 @@ fn main() {
         }),
     ];
 
-    // Run the tests and capture the exit code
-    let exit_code = libtest_mimic::run(&args, tests);
-
-    // Clean up any containers created by integration tests
-    cleanup_integration_test_containers();
-
-    // Exit with the test result
-    exit_code.exit();
+    // Run the tests and exit with the result
+    libtest_mimic::run(&args, tests).exit();
 }
