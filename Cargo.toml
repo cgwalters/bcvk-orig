@@ -1,5 +1,6 @@
 [workspace]
 members = [ "crates/*" ]
+default-members = [ "crates/kit", "crates/xtask" ]
 resolver = "2"
 
 [workspace.dependencies]
