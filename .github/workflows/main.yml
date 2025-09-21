@@ -49,3 +49,16 @@ jobs:
         
       - name: Run integration tests
         run: just test-integration
+
+      - name: Create archive
+        run: just archive
+        
+      - name: Upload artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcvk-binary
+          path: |
+            target/bcvk-*.tar.gz
+            target/bcvk-*.tar.gz.sha256
+          retention-days: 7
