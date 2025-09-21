@@ -54,6 +54,29 @@ fmt:
 run *ARGS:
     cargo run --release -- {{ ARGS }}
 
+# Create archive with binary, tarball, and checksums
+archive: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ARCH=$(arch)
+    BINARY_PATH="target/release/bcvk"
+    TARGET_NAME="bcvk-${ARCH}-unknown-linux-gnu"
+    
+    # Strip the binary
+    strip "${BINARY_PATH}" || true
+    
+    # Copy binary with target-specific name
+    cp "${BINARY_PATH}" "${TARGET_NAME}"
+    
+    # Create tarball
+    tar -czf "${TARGET_NAME}.tar.gz" "${TARGET_NAME}"
+    
+    # Generate checksums
+    sha256sum "${TARGET_NAME}.tar.gz" > "${TARGET_NAME}.tar.gz.sha256"
+    
+    echo "Archive created: ${TARGET_NAME}.tar.gz"
+    echo "Checksum: ${TARGET_NAME}.tar.gz.sha256"
+
 # Install the binary to ~/.local/bin
 install: build
     cp target/release/bck ~/.local/bin/
