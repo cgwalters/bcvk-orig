@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-*'
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version from tag
+        id: get-version
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          PRERELEASE=""
+          if [[ "$VERSION" == *"-"* ]]; then
+            PRERELEASE="--prerelease"
+          fi
+          
+          gh release create "${{ github.ref_name }}" \
+            --title "Release ${{ github.ref_name }}" \
+            --notes "Release ${{ github.ref_name }}
+          
+          ## Installation
+          
+          Download the appropriate binary for your platform from the assets below.
+          
+          ### Linux x86_64 (glibc)
+          \`\`\`bash
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/bcvk-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf bcvk-x86_64-unknown-linux-gnu.tar.gz
+          sudo mv bcvk-x86_64-unknown-linux-gnu /usr/local/bin/bcvk
+          \`\`\`
+          
+          
+          ## Checksums
+          
+          Verify the integrity of your download with the provided SHA256 checksums.
+          " \
+          $PRERELEASE
+
+  build-release-binaries:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Native x86_64 build
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            build-tool: cargo
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      
+      - name: Cache build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      
+      - name: Build with cargo
+        if: matrix.build-tool == 'cargo'
+        run: |
+          cargo build --release --package bcvk --target ${{ matrix.target }}
+        env:
+          CARGO_PROFILE_RELEASE_LTO: true
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+      
+      - name: Prepare release artifacts
+        shell: bash
+        run: |
+          BINARY_PATH="target/${{ matrix.target }}/release/bcvk"
+          
+          # Strip the binary
+          strip "${BINARY_PATH}" || true
+          
+          # Rename for upload
+          cp "${BINARY_PATH}" "bcvk-${{ matrix.target }}"
+          
+          # Create tarball
+          tar -czf "bcvk-${{ matrix.target }}.tar.gz" "bcvk-${{ matrix.target }}"
+          
+          # Generate checksums
+          sha256sum "bcvk-${{ matrix.target }}.tar.gz" > "bcvk-${{ matrix.target }}.tar.gz.sha256"
+      
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for file in bcvk-${{ matrix.target }}*; do
+            echo "Uploading $file"
+            gh release upload "${{ github.ref_name }}" "$file" --clobber
+          done
