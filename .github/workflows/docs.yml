@@ -35,13 +35,8 @@ jobs:
       - name: Install mdbook-linkcheck
         run: |
           curl -sSL https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/download/v0.7.7/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o linkcheck.zip
-          unzip linkcheck.zip
+          unzip -o linkcheck.zip
           chmod +x mdbook-linkcheck
-          echo "$(pwd)" >> $GITHUB_PATH
-
-      - name: Install mdbook_header_footer
-        run: |
-          curl -sSL https://github.com/cgwalters/mdbook_header_footer/releases/download/v0.1.0/mdbook_header_footer-v0.1.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=.
           echo "$(pwd)" >> $GITHUB_PATH
 
       - name: Build documentation
@@ -53,7 +48,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/book/html
+          path: docs/book
 
   deploy:
     if: github.ref == 'refs/heads/main'
